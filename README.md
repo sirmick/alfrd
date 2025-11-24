@@ -1,63 +1,445 @@
-# AI Document Secretary - Build Plan
+# AI Document Secretary (esec)
 
-## Core Concept
-Personal document management system that ingests any document type, extracts structured data via AI, and maintains hierarchical summaries (weekly → monthly → yearly) organized by category.
+> Your personal AI-powered document management system that ingests, processes, and summarizes all your documents automatically.
 
-## Architecture
+## What is esec?
+
+**esec** (Electronic Secretary) is a personal document management system that uses AI to automatically process, categorize, and summarize your documents. Drop a photo of a bill, receipt, or any document into a watched folder, and esec will:
+
+- **Extract text** using AI-powered OCR (Claude Vision API)
+- **Categorize** the document (bill, tax document, receipt, insurance, etc.)
+- **Extract structured data** (vendor, amount, due date, account numbers)
+- **Generate summaries** (weekly → monthly → yearly rollups by category)
+- **Make it searchable** with full-text search across all documents
+- **Provide insights** via natural language queries: "What bills are due this week?" "How much did I spend on utilities last month?"
+
+### Use Cases
+
+- 📱 **Mobile document capture**: Snap photos of bills and receipts on your phone
+- 📧 **Email forwarding**: Forward bills/statements to your esec inbox (future)
+- 🗂️ **Automatic organization**: Never manually file a document again
+- 💰 **Spending tracking**: Automatic categorization and spending analysis
+- 📊 **Tax preparation**: All tax-related documents organized and summarized
+- ⏰ **Bill reminders**: Track due dates and payment status
+- 🔍 **Quick search**: Find any document instantly by content or metadata
+
+## Architecture Overview
+
 ```
-Documents → AI Processing → Structured Storage → Hierarchical Summaries → MCP Server Interface
+┌────────────┐
+│  Document  │
+│  (Photo,   │──────► Watched Folder (/data/inbox)
+│  PDF, etc) │
+└────────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │ Document         │
+                    │ Processor        │
+                    │ (Watchdog + OCR) │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ DuckDB Storage   │
+                    │ + Filesystem     │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ API Server       │
+                    │ (FastAPI)        │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ MCP Server       │
+                    │ (AI Analysis)    │
+                    └────────┬─────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+        ┌─────────┐   ┌──────────┐   ┌──────────┐
+        │ Web UI  │   │ Claude   │   │ CLI      │
+        │ (React) │   │ Desktop  │   │ Tools    │
+        └─────────┘   └──────────┘   └──────────┘
 ```
 
-**Key Components:**
-1. **Input**: File upload (later: mobile scan, email)
-2. **Processing**: LLM extracts facts, categorizes, summarizes per document type
-3. **Storage**: 
-   - Raw documents (filesystem)
-   - Structured facts
-   - Running summaries (markdown files by category: bills.md, taxes.md, etc.)
-4. **Aggregation**: Weekly → Monthly → Yearly rollups
-5. **Interface**: MCP server with query/action tools (CSV manipulation, calculations, etc.)
+## Key Features
 
-## MVP - Phase 1 (Start Here)
-Build a working prototype YOU use daily:
+### 🤖 AI-Powered Processing
+- **Multi-model support**: Claude API, OpenRouter, and local models
+- **Vision AI**: Extract text from photos and scanned documents
+- **Smart categorization**: Automatic document type detection
+- **Data extraction**: Intelligently parse vendor names, amounts, dates
+- **Natural language queries**: Ask questions about your documents
 
-**Features:**
-- Watch a folder for new PDFs/images
-- Process with Claude API (vision + text extraction)
-- Categorize documents (bill, tax, receipt, insurance, advertising, other)
-- Extract structured data (vendor, amount, due date, key facts)
-- Store in SQLite
-- Generate weekly summary markdown
-- Simple CLI to query: "What bills are due?" "Total spent on utilities?"
+### 📦 Privacy & Isolation
+- **Isolated containers**: Each user gets their own Docker container
+- **Local-first**: Data stays in your control
+- **No vendor lock-in**: Self-hosted, open-source core
 
-**Tech Stack:**
-- Python
-- Claude API (Sonnet 4.5)
-- SQLite
-- Local filesystem
-- CLI interface
+### 🌐 Multi-Platform
+- **Web UI**: Access from any browser
+- **Mobile apps**: Native iOS/Android (via Capacitor)
+- **Claude Desktop**: MCP server integration
+- **CLI**: Programmatic access via command line
+- **Offline support**: Work without internet, sync when online
 
-## Immediate Next Steps
+### 🔍 Powerful Search & Analytics
+- **Full-text search**: Find documents by content or metadata
+- **Hierarchical summaries**: Weekly → Monthly → Yearly rollups
+- **Spending analytics**: Track spending by category, vendor, time period
+- **Bill tracking**: See upcoming bills and overdue payments
 
-1. **Set up project structure:**
+## Quick Start
 
+### Prerequisites
+- Docker and Docker Compose
+- Claude API key (or OpenRouter API key)
 
-2. **Build core loop (first 2 hours):**
-   - Initialize SQLite schema
-   - Process single document with Claude API
-   - Store extracted data
-   - Generate basic summary
+### Installation
 
-3. **Test with your own documents for 1 month** - if you don't use it daily, pivot
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/esec.git
+cd esec
 
-## Later Phases
-- Phase 2: Web UI, better categorization, running totals
-- Phase 3: Mobile apps, email ingestion, multi-user
+# Set up environment variables
+cp .env.example .env
+# Edit .env and add your API keys
 
-## Business Model (After Validation)
-- Start with technical users (open source MCP core)
-- Hosted version: $20-50/month
-- Consumer apps: Lower price point
-- Target: $5K MRR in 12-18 months
+# Start the system
+docker-compose up -d
 
---
+# Check status
+curl http://localhost:8000/api/v1/health
+```
+
+### First Document
+
+```bash
+# Drop a document in the inbox
+cp ~/Downloads/electric-bill.pdf data/inbox/
+
+# Wait a few seconds for processing...
+
+# Check documents via API
+curl http://localhost:8000/api/v1/documents | jq
+
+# Or open the web UI
+open http://localhost:8080
+```
+
+### Using Claude Desktop
+
+Add to your Claude Desktop MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "esec": {
+      "command": "docker",
+      "args": ["exec", "esec-dev", "python", "-m", "mcp_server.main"],
+      "env": {}
+    }
+  }
+}
+```
+
+Now ask Claude: "What documents do I have?" or "What bills are due this week?"
+
+## Project Structure
+
+```
+esec/
+├── document-processor/    # Watches inbox, extracts text, stores documents
+├── api-server/           # REST API for document/summary access
+├── mcp-server/           # MCP server for AI integration
+├── web-ui/               # React web interface
+├── docker/               # Docker configuration
+├── shared/               # Shared utilities and types
+└── data/                 # Runtime data (not in git)
+    ├── inbox/           # Drop documents here
+    ├── documents/       # Processed documents
+    ├── summaries/       # Generated summaries
+    └── esec.db          # DuckDB database
+```
+
+## API Examples
+
+### List Documents
+
+```bash
+curl http://localhost:8000/api/v1/documents?category=bill&limit=10
+```
+
+### Search Documents
+
+```bash
+curl http://localhost:8000/api/v1/search?q=electric+utility
+```
+
+### Get Weekly Summary
+
+```bash
+curl "http://localhost:8000/api/v1/summaries?period_type=weekly&start_date=2024-01-01"
+```
+
+### Natural Language Query
+
+```bash
+curl -X POST http://localhost:8000/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "How much did I spend on groceries this month?"}'
+```
+
+### Spending Analytics
+
+```bash
+curl "http://localhost:8000/api/v1/analytics/spending?groupBy=category&date_range=2024-01"
+```
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Required
+CLAUDE_API_KEY=sk-ant-...           # Claude API key
+OPENROUTER_API_KEY=sk-or-...        # OpenRouter API key (optional)
+
+# Paths
+DATABASE_PATH=/data/esec.db
+INBOX_PATH=/data/inbox
+DOCUMENTS_PATH=/data/documents
+SUMMARIES_PATH=/data/summaries
+
+# API Configuration
+API_HOST=0.0.0.0
+API_PORT=8000
+MCP_PORT=3000
+
+# Logging
+LOG_LEVEL=INFO                      # DEBUG, INFO, WARNING, ERROR
+
+# Environment
+ENV=development                     # development, production
+```
+
+## Development
+
+### Local Development (without Docker)
+
+```bash
+# Set up Python environment
+python -m venv .venv
+source .venv/bin/activate
+pip install poetry
+
+# Install dependencies
+poetry install
+
+# Initialize database
+python scripts/init-db.py
+
+# Run services in separate terminals
+cd api-server && python -m api_server.main
+cd mcp-server && python -m mcp_server.main
+cd document-processor && python -m document_processor.watcher
+cd web-ui && npm run dev
+```
+
+### Running Tests
+
+```bash
+# Unit tests
+pytest document-processor/tests/
+pytest api-server/tests/
+pytest mcp-server/tests/
+
+# Integration tests
+pytest tests/integration/
+
+# E2E tests (Web UI)
+cd web-ui && npm run test:e2e
+
+# Load testing
+locust -f tests/load/locustfile.py
+```
+
+## Deployment
+
+### Single-User Deployment (Recommended for MVP)
+
+```bash
+# Build and run with Docker Compose
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop
+docker-compose down
+```
+
+### Multi-User Production Deployment
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for detailed multi-user deployment architecture with:
+- Separate Web UI server
+- Per-user isolated containers
+- Container orchestration (Kubernetes/Docker Swarm)
+- API gateway for routing
+- User authentication and authorization
+
+## Roadmap
+
+### Phase 1: MVP (Current)
+- ✅ Document processing pipeline
+- ✅ AI categorization and extraction
+- ✅ Basic web UI
+- ✅ MCP server integration
+- ✅ Full-text search
+- ⏳ Weekly/monthly summaries
+
+### Phase 2: Enhanced Features
+- ⏳ Advanced analytics dashboard
+- ⏳ Offline mobile app
+- ⏳ Email forwarding integration
+- ⏳ OCR quality improvements
+- ⏳ Custom categorization rules
+- ⏳ Bill payment reminders
+
+### Phase 3: Multi-User & Production
+- ⏳ User authentication
+- ⏳ Multi-tenant architecture
+- ⏳ Backup and restore
+- ⏳ Admin dashboard
+- ⏳ Usage analytics
+- ⏳ API rate limiting
+
+### Phase 4: Advanced Features
+- ⏳ Document editing/annotation
+- ⏳ Workflow automation
+- ⏳ Third-party integrations (QuickBooks, Mint, etc.)
+- ⏳ Machine learning for custom extraction
+- ⏳ Document templates
+- ⏳ Collaborative features
+
+## Technical Details
+
+### Technologies
+
+**Backend:**
+- **Python 3.11+**: Core language
+- **FastAPI**: REST API framework
+- **DuckDB**: Embedded analytical database with FTS5
+- **MCP SDK**: Model Context Protocol for AI integration
+- **Anthropic SDK**: Claude API client
+- **Watchdog**: Filesystem monitoring
+
+**Frontend:**
+- **React 18**: UI framework
+- **Vite**: Build tool
+- **Capacitor**: Native mobile wrapper
+- **Dexie**: IndexedDB wrapper for offline storage
+- **Recharts**: Data visualization
+
+**Infrastructure:**
+- **Docker**: Containerization
+- **Alpine Linux**: Lightweight base image
+- **Supervisord**: Process management
+- **Nginx**: Reverse proxy (production)
+
+### Database Schema
+
+Key tables:
+- `documents`: Core document metadata, extracted data, categorization
+- `summaries`: Generated summaries by period and category
+- `processing_events`: Event log for document pipeline
+- `analytics`: Pre-computed metrics and trends
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md#database-schema-duckdb) for complete schema.
+
+### Security Considerations
+
+- **API Keys**: Stored in environment variables, never in code
+- **File isolation**: Each user container has isolated filesystem
+- **Input validation**: All API inputs validated with Pydantic
+- **SQL injection**: Protected via parameterized queries
+- **XSS**: React automatically escapes output
+- **Authentication**: JWT tokens for multi-user deployment
+
+## Troubleshooting
+
+### Document not processing
+
+```bash
+# Check processor logs
+docker-compose logs document-processor
+
+# Check file permissions
+ls -la data/inbox/
+
+# Manually trigger processing
+docker-compose exec esec python -m document_processor.main
+```
+
+### API not responding
+
+```bash
+# Check API server status
+curl http://localhost:8000/api/v1/health
+
+# Check logs
+docker-compose logs api-server
+
+# Restart services
+docker-compose restart
+```
+
+### Database issues
+
+```bash
+# Reinitialize database
+docker-compose exec esec python scripts/init-db.py
+
+# Backup database
+cp data/esec.db data/esec.db.backup
+```
+
+## Contributing
+
+We welcome contributions! Please see [`CONTRIBUTING.md`](CONTRIBUTING.md) for guidelines.
+
+### Development Workflow
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature/amazing-feature`
+3. Make your changes
+4. Run tests: `pytest && npm test`
+5. Commit: `git commit -m 'Add amazing feature'`
+6. Push: `git push origin feature/amazing-feature`
+7. Open a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see [`LICENSE`](LICENSE) file for details.
+
+## Support
+
+- 📖 **Documentation**: [`ARCHITECTURE.md`](ARCHITECTURE.md)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/yourusername/esec/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/esec/discussions)
+- 📧 **Email**: support@example.com
+
+## Acknowledgments
+
+- Built with [Claude](https://anthropic.com) by Anthropic
+- Inspired by personal frustration with document management
+- MCP protocol by Anthropic
+- Thanks to all contributors!
+
+---
+
+**⚡ Start managing your documents smarter, not harder.**

@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  esec:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: esec-dev
+    ports:
+      - "8000:8000"  # API Server
+      - "8080:8080"  # Web UI
+      - "3000:3000"  # MCP Server
+    volumes:
+      - ../data:/data
+      - ../document-processor:/app/document-processor
+      - ../api-server:/app/api-server
+      - ../mcp-server:/app/mcp-server
+      - ../web-ui:/app/web-ui
+      - ../shared:/app/shared
+    environment:
+      - ENV=development
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - DATABASE_PATH=/data/esec.db
+      - INBOX_PATH=/data/inbox
+      - DOCUMENTS_PATH=/data/documents
+      - SUMMARIES_PATH=/data/summaries
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - MCP_PORT=3000
+      - LOG_LEVEL=DEBUG
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

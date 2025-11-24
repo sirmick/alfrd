@@ -1,0 +1,27 @@
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "document-processor"
+version = "0.1.0"
+description = "Document processing service for esec"
+authors = ["Your Name <you@example.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+anthropic = "^0.18.0"
+watchdog = "^3.0.0"
+pillow = "^10.2.0"
+pypdf = "^3.17.0"
+httpx = "^0.26.0"
+pydantic = "^2.5.0"
+pydantic-settings = "^2.1.0"
+python-magic = "^0.4.27"
+duckdb = "^0.10.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-asyncio = "^0.21.0"
+pytest-mock = "^3.12.0"
