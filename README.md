@@ -13,7 +13,7 @@ Documents → AI Processing → Structured Storage → Hierarchical Summaries �
 2. **Processing**: LLM extracts facts, categorizes, summarizes per document type
 3. **Storage**: 
    - Raw documents (filesystem)
-   - Structured facts (SQLite with JSON)
+   - Structured facts
    - Running summaries (markdown files by category: bills.md, taxes.md, etc.)
 4. **Aggregation**: Weekly → Monthly → Yearly rollups
 5. **Interface**: MCP server with query/action tools (CSV manipulation, calculations, etc.)
@@ -40,17 +40,7 @@ Build a working prototype YOU use daily:
 ## Immediate Next Steps
 
 1. **Set up project structure:**
-```
-document-secretary/
-├── processor.py          # Core document processing
-├── database.py          # SQLite wrapper
-├── summarizer.py        # Generate rollup summaries
-├── cli.py              # Command interface
-├── config.py           # API keys, paths
-├── documents/          # Raw document storage
-├── summaries/          # Generated markdown files
-└── data.db            # SQLite database
-```
+
 
 2. **Build core loop (first 2 hours):**
    - Initialize SQLite schema
@@ -70,6 +60,4 @@ document-secretary/
 - Consumer apps: Lower price point
 - Target: $5K MRR in 12-18 months
 
----
-
-**Now go build the document processor. Start with getting one document processed and stored correctly.**
+--
