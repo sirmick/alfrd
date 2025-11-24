@@ -8,9 +8,13 @@ Usage:
 import sys
 import os
 
-# Add src to path
+# Add src to path and change to project root for .env loading
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+
+# Change to project root so Settings can find .env
+os.chdir(project_root)
 
 from mcp_server.llm import BedrockClient
 from mcp_server.tools.classify_document import classify_document
