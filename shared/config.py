@@ -29,7 +29,8 @@ class Settings(BaseSettings):
     mcp_port: int = 3000
     
     # Bedrock Configuration
-    bedrock_model_id: str = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+    # bedrock_model_id: str = "anthropic.claude-3-5-sonnet-20241022-v2:0"  # Requires authorization
+    bedrock_model_id: str = "us.amazon.nova-lite-v1:0"  # Using Nova Lite inference profile
     bedrock_max_tokens: int = 4096
     
     # Logging

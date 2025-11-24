@@ -68,7 +68,7 @@ class BedrockClient:
         max_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
-        Invoke Claude model with messages.
+        Invoke Bedrock model with messages.
         
         Args:
             system: System prompt
@@ -88,14 +88,44 @@ class BedrockClient:
         """
         max_tokens_to_use = max_tokens or self.max_tokens
         
-        # Build request body for Claude 3 models
-        request_body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "system": system,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens_to_use,
-        }
+        # Detect model type and build appropriate request body
+        is_claude = 'anthropic' in self.model_id.lower() or 'claude' in self.model_id.lower()
+        is_nova = 'amazon' in self.model_id.lower() and 'nova' in self.model_id.lower()
+        
+        if is_claude:
+            # Claude models use Messages API format
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "system": system,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens_to_use,
+            }
+        elif is_nova:
+            # Amazon Nova models use different format
+            # Combine system and user message for Nova
+            combined_prompt = f"{system}\n\n{messages[0]['content']}"
+            request_body = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"text": combined_prompt}]
+                    }
+                ],
+                "inferenceConfig": {
+                    "temperature": temperature,
+                    "maxTokens": max_tokens_to_use,
+                }
+            }
+        else:
+            # Default to Claude format
+            request_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "system": system,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens_to_use,
+            }
         
         try:
             logger.debug(f"Invoking Bedrock model {self.model_id}")
@@ -110,16 +140,32 @@ class BedrockClient:
             # Parse response
             response_body = json.loads(response['body'].read())
             
-            # Extract text content from response
+            # Extract text content from response (handle both Claude and Nova formats)
             content = ""
-            if 'content' in response_body and len(response_body['content']) > 0:
-                content = response_body['content'][0].get('text', '')
+            if is_nova:
+                # Nova format: output.message.content[0].text
+                if 'output' in response_body and 'message' in response_body['output']:
+                    msg_content = response_body['output']['message'].get('content', [])
+                    if len(msg_content) > 0:
+                        content = msg_content[0].get('text', '')
+            else:
+                # Claude format: content[0].text
+                if 'content' in response_body and len(response_body['content']) > 0:
+                    content = response_body['content'][0].get('text', '')
+            
+            # Extract usage and stop reason (handle format differences)
+            if is_nova:
+                usage = response_body.get('usage', {})
+                stop_reason = response_body.get('stopReason', 'unknown')
+            else:
+                usage = response_body.get('usage', {})
+                stop_reason = response_body.get('stop_reason', 'unknown')
             
             result = {
                 'content': content,
-                'stop_reason': response_body.get('stop_reason', 'unknown'),
-                'usage': response_body.get('usage', {}),
-                'model_id': response_body.get('model', self.model_id),
+                'stop_reason': stop_reason,
+                'usage': usage,
+                'model_id': self.model_id,
             }
             
             logger.info(
