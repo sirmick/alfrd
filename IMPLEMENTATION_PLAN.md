@@ -1195,3 +1195,162 @@ After completing Phase 1 (Commits 1-22):
 **Estimated Time to Phase 1 Complete**: 2-3 days
 **Estimated Time to Phase 2 Complete**: 3-4 days
 **Estimated Time to Production Ready**: 2-3 weeks
+
+---
+
+## Architecture Decision Record - November 2024
+
+### Document Input Structure Change
+
+**Decision:** Move from single-file inbox to folder-based document input with metadata.
+
+**Structure:**
+```
+inbox/
+├── document-A/
+│   ├── meta.json          # Document metadata + processing order
+│   ├── image.jpg          # Image to OCR
+│   └── additional.jpg     # Additional pages
+└── document-B/
+    ├── meta.json
+    └── doc.text           # Plain text document
+```
+
+**meta.json format:**
+```json
+{
+  "id": "doc-uuid",
+  "created_at": "2024-01-15T10:30:00Z",
+  "documents": [
+    {"file": "image.jpg", "type": "image", "order": 1},
+    {"file": "page2.jpg", "type": "image", "order": 2}
+  ],
+  "metadata": {
+    "source": "mobile_scan",
+    "tags": ["bill", "utilities"]
+  }
+}
+```
+
+### OCR Technology Selection
+
+**Decision:** Use AWS Textract for image OCR instead of Claude Vision.
+
+**Rationale:**
+- Production-quality OCR for financial documents
+- Better table/form extraction
+- Cost-effective ($1.50/1000 pages)
+- Handles handwriting
+- Keep Tesseract as fallback for non-critical documents
+
+**Removed:**
+- Claude Vision API integration
+- pypdf for PDF processing (will handle PDFs as images via Textract if needed)
+
+### Processing Pipeline Architecture
+
+**New pipeline:**
+```
+1. Document Folder Detection → Read meta.json
+2. OCR/Text Extraction → AWS Textract or plain text
+3. MCP: Document Classification
+4. MCP: Type-Specific Summarization
+5. Financial Documents → Update Running Totals (CSV/Pandas)
+6. Hierarchical Summarization:
+   - Add to Weekly Summary
+   - Roll up to Monthly Summary
+   - Roll up to Yearly Summary
+7. Store all in DuckDB + filesystem
+```
+
+### Hierarchical Summarization Strategy
+
+**Weekly Summaries:**
+- Generated per category (bills, receipts, etc.)
+- Include document count, total amounts, key items
+- Stored as JSON in DuckDB + markdown files
+
+**Monthly Summaries:**
+- Aggregate weekly summaries
+- Trend analysis vs previous months
+- Export financial CSV for Excel compatibility
+
+**Yearly Summaries:**
+- Aggregate monthly summaries
+- Year-end financial reports
+- Tax document compilation
+
+### Financial Document Tracking
+
+**For financial documents, maintain:**
+1. **DuckDB analytics tables** - Structured queries
+2. **CSV exports** - Excel compatibility, running totals per category
+3. **Pandas DataFrames** - In-memory analysis via MCP tools
+4. **MCP Financial Tools:**
+   - `classify_financial_document` - Bill/receipt/invoice/statement
+   - `extract_financial_data` - Amount, vendor, date, account
+   - `update_running_totals` - Category spending tracking
+   - `analyze_financial_trends` - Month-over-month comparisons
+   - `export_financial_summary` - CSV/Excel generation
+
+### Implementation Priorities
+
+**Phase 1A: Core Refactor (Week 1)**
+1. Update document processor for folder-based input
+2. Implement meta.json parsing
+3. Add AWS Textract integration
+4. Add plain text document support
+5. Remove Claude Vision and pypdf dependencies
+
+**Phase 1B: MCP Integration (Week 2)**
+1. MCP classification tool
+2. MCP summarization tools (per document type)
+3. Financial extraction tools
+4. Running totals management
+
+**Phase 2: Hierarchical Summarization (Week 3)**
+1. Weekly summary generation
+2. Monthly rollup logic
+3. Yearly rollup logic
+4. CSV export functionality
+
+**Phase 3: Advanced Features (Week 4+)**
+1. Trend analysis
+2. Anomaly detection
+3. Budget tracking
+4. Tax document preparation
+
+### Dependencies Update
+
+**Remove:**
+- `anthropic` (Claude API) - from document-processor
+- `pypdf` - no longer needed
+
+**Add:**
+- `boto3` - AWS SDK for Textract
+- `pandas` - Financial data analysis
+- `openpyxl` - Excel export support
+
+### Database Schema Additions
+
+**New tables for hierarchical summaries:**
+```sql
+-- Weekly summaries with financial data
+ALTER TABLE summaries ADD COLUMN financial_data JSON;
+ALTER TABLE summaries ADD COLUMN csv_export_path VARCHAR;
+
+-- Running totals tracking
+CREATE TABLE financial_totals (
+    id UUID PRIMARY KEY DEFAULT uuid(),
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    category VARCHAR NOT NULL,
+    subcategory VARCHAR,
+    total_amount DECIMAL(12, 2),
+    transaction_count INTEGER,
+    vendors JSON,  -- Array of vendors in period
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(period_start, period_end, category, subcategory)
+);
+```

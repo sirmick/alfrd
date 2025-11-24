@@ -4,14 +4,16 @@
 
 ## What is ALFRD?
 
-**ALFRD** (Automated Ledger & Filing Research Database) is a personal document management system that uses AI to automatically process, categorize, and summarize your documents. Drop a photo of a bill, receipt, or any document into a watched folder, and ALFRD will:
+**ALFRD** (Automated Ledger & Filing Research Database) is a personal document management system that uses AI to automatically process, categorize, and summarize your documents. Create a document folder with metadata and ALFRD will:
 
-- **Extract text** using AI-powered OCR (Claude Vision API)
-- **Categorize** the document (bill, tax document, receipt, insurance, etc.)
+- **Extract text** using AWS Textract OCR or plain text ingestion
+- **Classify via MCP** using LLM-powered document type detection
 - **Extract structured data** (vendor, amount, due date, account numbers)
-- **Generate summaries** (weekly → monthly → yearly rollups by category)
-- **Make it searchable** with full-text search across all documents
-- **Provide insights** via natural language queries: "What bills are due this week?" "How much did I spend on utilities last month?"
+- **Type-specific summarization** per document category
+- **Hierarchical summaries** (weekly → monthly → yearly rollups)
+- **Financial tracking** with running totals, trends, CSV exports
+- **Full-text search** across all documents in DuckDB
+- **Natural language queries** via MCP: "What bills are due this week?"
 
 ### Use Cases
 
@@ -26,53 +28,56 @@
 ## Architecture Overview
 
 ```
-┌────────────┐
-│  Document  │
-│  (Photo,   │──────► Watched Folder (/data/inbox)
-│  PDF, etc) │
-└────────────┘
-                              │
-                              ▼
-                    ┌──────────────────┐
-                    │ Document         │
-                    │ Processor        │
-                    │ (Watchdog + OCR) │
-                    └────────┬─────────┘
-                             │
-                             ▼
-                    ┌──────────────────┐
-                    │ DuckDB Storage   │
-                    │ + Filesystem     │
-                    └────────┬─────────┘
-                             │
-                             ▼
-                    ┌──────────────────┐
-                    │ API Server       │
-                    │ (FastAPI)        │
-                    └────────┬─────────┘
-                             │
-                             ▼
-                    ┌──────────────────┐
-                    │ MCP Server       │
-                    │ (AI Analysis)    │
-                    └────────┬─────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-        ┌─────────┐   ┌──────────┐   ┌──────────┐
-        │ Web UI  │   │ Claude   │   │ CLI      │
-        │ (React) │   │ Desktop  │   │ Tools    │
-        └─────────┘   └──────────┘   └──────────┘
+┌──────────────────┐
+│ Document Folder  │
+│ /inbox/doc-A/    │
+│  ├─ meta.json    │──────► Watched Folder Structure
+│  ├─ image.jpg    │
+│  └─ page2.jpg    │
+└──────────────────┘
+         │
+         ▼
+┌──────────────────────┐
+│ Document Processor   │
+│ 1. Parse meta.json   │
+│ 2. AWS Textract OCR  │
+│ 3. Store raw text    │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│ API Server + MCP     │
+│ 1. Classify document │
+│ 2. Extract data      │
+│ 3. Type summary      │
+│ 4. Update rollups    │
+└──────────┬───────────┘
+           │
+    ┌──────┴───────┐
+    ▼              ▼
+┌─────────┐   ┌──────────────┐
+│ DuckDB  │   │ Hierarchical │
+│ Storage │   │ Summaries    │
+│         │   │ (W→M→Y)      │
+└─────────┘   └──────────────┘
+           │
+    ┌──────┴────────┐
+    ▼               ▼
+┌─────────┐   ┌──────────┐
+│ Web UI  │   │ CSV/Excel│
+│ (React) │   │ Exports  │
+└─────────┘   └──────────┘
 ```
 
 ## Key Features
 
 ### 🤖 AI-Powered Processing
-- **Multi-model support**: Claude API, OpenRouter, and local models
-- **Vision AI**: Extract text from photos and scanned documents
-- **Smart categorization**: Automatic document type detection
-- **Data extraction**: Intelligently parse vendor names, amounts, dates
-- **Natural language queries**: Ask questions about your documents
+- **AWS Textract OCR**: Production-quality text extraction from images and scanned documents
+- **Plain text support**: Direct ingestion of text documents
+- **MCP-based classification**: Automatic document type detection via LLM
+- **Structured data extraction**: Parse vendor names, amounts, dates, account numbers
+- **Hierarchical summarization**: Weekly → Monthly → Yearly rollups
+- **Financial tracking**: Running totals, trend analysis, CSV exports
 
 ### 📦 Privacy & Isolation
 - **Isolated containers**: Each user gets their own Docker container
@@ -119,16 +124,31 @@ curl http://localhost:8000/api/v1/health
 ### First Document
 
 ```bash
-# Drop a document in the inbox
-cp ~/Downloads/electric-bill.pdf data/inbox/
+# Create a document folder
+mkdir -p data/inbox/my-bill
 
-# Wait a few seconds for processing...
+# Create metadata
+cat > data/inbox/my-bill/meta.json << EOF
+{
+  "id": "$(uuidgen)",
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "documents": [
+    {"file": "bill.jpg", "type": "image", "order": 1}
+  ],
+  "metadata": {
+    "source": "manual",
+    "tags": ["bill"]
+  }
+}
+EOF
 
-# Check documents via API
+# Add your document
+cp ~/Downloads/electric-bill.jpg data/inbox/my-bill/bill.jpg
+
+# Wait for processing...
+
+# Check results
 curl http://localhost:8000/api/v1/documents | jq
-
-# Or open the web UI
-open http://localhost:8080
 ```
 
 ### Using Claude Desktop
@@ -153,16 +173,23 @@ Now ask Claude: "What documents do I have?" or "What bills are due this week?"
 
 ```
 alfrd/
-├── document-processor/    # Watches inbox, extracts text, stores documents
-├── api-server/           # REST API for document/summary access
-├── mcp-server/           # MCP server for AI integration
+├── document-processor/    # Watches inbox, OCR, text extraction
+├── api-server/           # REST API + MCP orchestration
+├── mcp-server/           # MCP tools for classification/summarization
 ├── web-ui/               # React web interface
 ├── docker/               # Docker configuration
 ├── shared/               # Shared utilities and types
 └── data/                 # Runtime data (not in git)
-    ├── inbox/           # Drop documents here
-    ├── documents/       # Processed documents
-    ├── summaries/       # Generated summaries
+    ├── inbox/           # Document folders with meta.json
+    │   └── doc-A/
+    │       ├── meta.json
+    │       └── image.jpg
+    ├── documents/       # Processed documents + extracted text
+    ├── summaries/       # Hierarchical summaries (weekly/monthly/yearly)
+    │   ├── weekly/
+    │   ├── monthly/
+    │   └── yearly/
+    ├── exports/         # CSV/Excel financial exports
     └── alfrd.db          # DuckDB database
 ```
 
