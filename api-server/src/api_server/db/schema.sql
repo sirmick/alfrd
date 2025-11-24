@@ -1,4 +1,4 @@
--- DuckDB Schema for esec Document Secretary
+-- DuckDB Schema for ALFRD (Automated Ledger & Filing Research Database)
 -- Core documents table
 CREATE TABLE IF NOT EXISTS documents (
     id VARCHAR PRIMARY KEY,
@@ -8,12 +8,26 @@ CREATE TABLE IF NOT EXISTS documents (
     file_size BIGINT,
     mime_type VARCHAR,
     
-    -- Processing status
-    status VARCHAR NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
+    -- Processing status - detailed pipeline tracking
+    status VARCHAR NOT NULL CHECK (status IN (
+        'pending',           -- Document folder detected
+        'ocr_started',       -- AWS Textract called
+        'ocr_completed',     -- Text extracted
+        'classifying',       -- MCP classification in progress
+        'classified',        -- Type determined
+        'processing',        -- Type-specific handler processing
+        'completed',         -- All processing done
+        'failed'            -- Error at any stage
+    )),
     processed_at TIMESTAMP,
     error_message VARCHAR,
     
-    -- Categorization
+    -- Classification (new simplified system)
+    document_type VARCHAR CHECK (document_type IN ('junk', 'bill', 'finance')),
+    classification_confidence FLOAT,
+    classification_reasoning TEXT,
+    
+    -- Categorization (legacy - keeping for compatibility)
     category VARCHAR CHECK (category IN ('bill', 'tax', 'receipt', 'insurance', 'advertising', 'other')),
     subcategory VARCHAR,
     confidence FLOAT,
@@ -29,6 +43,7 @@ CREATE TABLE IF NOT EXISTS documents (
     raw_document_path VARCHAR,
     extracted_text_path VARCHAR,
     metadata_path VARCHAR,
+    folder_path VARCHAR,                    -- Path to document folder with meta.json
     
     -- Metadata
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -40,7 +55,8 @@ CREATE TABLE IF NOT EXISTS documents (
     
     -- JSON for flexible data
     structured_data JSON,
-    tags JSON
+    tags JSON,
+    folder_metadata JSON                    -- Parsed meta.json content
 );
 
 -- Summaries table (weekly, monthly, yearly rollups)
@@ -107,6 +123,7 @@ CREATE TABLE IF NOT EXISTS analytics (
 
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_documents_due_date ON documents(due_date);
 CREATE INDEX IF NOT EXISTS idx_documents_vendor ON documents(vendor);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
