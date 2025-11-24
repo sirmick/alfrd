@@ -21,13 +21,6 @@ services:
       - ENV=development
       - CLAUDE_API_KEY=${CLAUDE_API_KEY}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - DATABASE_PATH=/data/esec.db
-      - INBOX_PATH=/data/inbox
-      - DOCUMENTS_PATH=/data/documents
-      - SUMMARIES_PATH=/data/summaries
-      - API_HOST=0.0.0.0
-      - API_PORT=8000
-      - MCP_PORT=3000
       - LOG_LEVEL=DEBUG
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
@@ -36,4 +29,4 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 5s

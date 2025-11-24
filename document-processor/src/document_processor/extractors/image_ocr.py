@@ -1,4 +1,4 @@
-"""Image text extraction using Claude Vision API."""
+"""Image OCR extraction using Claude Vision API."""
 
 import anthropic
 import base64
@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Dict
 import sys
 
-# Add parent directories to path for shared imports
+# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
-from shared.constants import DEFAULT_MODEL, MAX_TOKENS
+from shared.constants import CLAUDE_VISION_MODEL, CLAUDE_MAX_TOKENS, MIME_TYPE_MAP
 
 
 class ClaudeVisionExtractor:
@@ -23,17 +23,19 @@ class ClaudeVisionExtractor:
             api_key: Anthropic API key
         """
         self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = DEFAULT_MODEL
     
     async def extract_text(self, image_path: Path) -> Dict:
         """
-        Extract text from image using Claude vision.
+        Extract text from an image using Claude Vision.
         
         Args:
             image_path: Path to the image file
             
         Returns:
-            Dictionary with extracted_text, confidence, and metadata
+            Dictionary containing:
+                - extracted_text: str - The extracted text content
+                - confidence: float - Confidence score (0-1)
+                - metadata: dict - Additional metadata
         """
         # Read and encode image
         with open(image_path, "rb") as f:
@@ -41,20 +43,13 @@ class ClaudeVisionExtractor:
         
         # Determine media type
         suffix = image_path.suffix.lower()
-        media_type_map = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".gif": "image/gif",
-            ".webp": "image/webp"
-        }
-        media_type = media_type_map.get(suffix, "image/jpeg")
+        media_type = MIME_TYPE_MAP.get(suffix, "image/jpeg")
         
+        # Call Claude Vision API
         try:
-            # Call Claude vision API
             message = self.client.messages.create(
-                model=self.model,
-                max_tokens=MAX_TOKENS,
+                model=CLAUDE_VISION_MODEL,
+                max_tokens=CLAUDE_MAX_TOKENS,
                 messages=[
                     {
                         "role": "user",
@@ -77,7 +72,7 @@ Provide:
 3. Key information visible (amounts, dates, company names)
 4. Any damage/quality issues affecting readability
 
-Format as JSON with keys: extracted_text, document_type, key_info, quality_notes"""
+Format your response as a structured extraction, starting with the full text content."""
                             }
                         ]
                     }
@@ -88,24 +83,18 @@ Format as JSON with keys: extracted_text, document_type, key_info, quality_notes
             response_text = message.content[0].text
             
             # For MVP, return simple structure
-            # TODO: Parse JSON response in future iteration
             return {
                 "extracted_text": response_text,
                 "confidence": 0.9,  # Claude is generally high confidence
                 "metadata": {
-                    "model": self.model,
+                    "model": CLAUDE_VISION_MODEL,
                     "image_format": media_type,
+                    "image_size": image_path.stat().st_size,
                     "tokens_used": message.usage.input_tokens + message.usage.output_tokens
                 }
             }
             
+        except anthropic.APIError as e:
+            raise RuntimeError(f"Claude API error: {e}") from e
         except Exception as e:
-            return {
-                "extracted_text": "",
-                "confidence": 0.0,
-                "metadata": {
-                    "error": str(e),
-                    "model": self.model,
-                    "image_format": media_type
-                }
-            }
+            raise RuntimeError(f"Failed to extract text from image: {e}") from e

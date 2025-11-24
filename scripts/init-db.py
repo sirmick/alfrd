@@ -1,73 +1,56 @@
 #!/usr/bin/env python3
-"""Initialize the DuckDB database with schema."""
+"""Initialize DuckDB database with schema."""
 
-import duckdb
 import sys
 from pathlib import Path
 
-# Add parent directory to path for imports
+# Add parent directory to path to import shared module
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import duckdb
 from shared.config import Settings
 
 
 def init_database():
-    """Initialize DuckDB database with schema."""
+    """Initialize the database with the schema."""
     settings = Settings()
     db_path = settings.database_path
     
-    print(f"Initializing database at {db_path}...")
-    
-    # Create parent directory if it doesn't exist
+    # Ensure parent directory exists
     db_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Connect to database (creates if doesn't exist)
+    print(f"Initializing database at {db_path}")
+    
+    # Create database connection
     conn = duckdb.connect(str(db_path))
     
-    # Read and execute schema
+    # Read schema file
     schema_path = Path(__file__).parent.parent / "api-server" / "src" / "api_server" / "db" / "schema.sql"
     
     if not schema_path.exists():
-        print(f"❌ Schema file not found: {schema_path}")
-        sys.exit(1)
-    
-    print(f"Loading schema from {schema_path}...")
+        print(f"ERROR: Schema file not found at {schema_path}")
+        return 1
     
     with open(schema_path) as f:
         schema_sql = f.read()
     
+    # Execute schema
     try:
-        # Execute schema (DuckDB doesn't have executescript, so we split by statement)
-        for statement in schema_sql.split(';'):
-            statement = statement.strip()
-            if statement:
-                conn.execute(statement)
+        # Split by semicolon and execute each statement
+        statements = [s.strip() for s in schema_sql.split(';') if s.strip()]
+        for statement in statements:
+            conn.execute(statement)
         
-        print("✅ Database schema created successfully")
-        
-        # Verify tables were created
-        tables = conn.execute("SHOW TABLES").fetchall()
-        print(f"\n📊 Created tables:")
-        for table in tables:
-            print(f"  - {table[0]}")
-        
-        # Create data directories
-        for directory in [settings.inbox_path, settings.documents_path, settings.summaries_path]:
-            directory.mkdir(parents=True, exist_ok=True)
-            print(f"✅ Created directory: {directory}")
+        conn.close()
+        print(f"✓ Database initialized successfully at {db_path}")
+        print(f"  Tables created: documents, summaries, processing_events, analytics")
+        return 0
         
     except Exception as e:
-        print(f"❌ Error creating schema: {e}")
-        sys.exit(1)
-    finally:
+        print(f"ERROR: Failed to initialize database: {e}")
         conn.close()
-    
-    print(f"\n🎉 Database initialization complete!")
-    print(f"   Database: {db_path}")
-    print(f"   Inbox: {settings.inbox_path}")
-    print(f"   Documents: {settings.documents_path}")
-    print(f"   Summaries: {settings.summaries_path}")
+        return 1
 
 
 if __name__ == "__main__":
-    init_database()
+    sys.exit(init_database())

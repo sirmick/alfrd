@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS analytics (
 
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_documents_due_date ON documents(due_date) WHERE due_date IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_documents_due_date ON documents(due_date);
 CREATE INDEX IF NOT EXISTS idx_documents_vendor ON documents(vendor);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);
 CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id, created_at DESC);

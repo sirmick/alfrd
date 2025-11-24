@@ -28,6 +28,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY --chown=esec:esec . /app
 
+# Install each subproject
+RUN pip install -e /app/document-processor && \
+    pip install -e /app/api-server && \
+    pip install -e /app/mcp-server
+
 # Copy supervisor config
 COPY docker/supervisord.conf /etc/supervisord.conf
 
@@ -36,9 +41,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
 # Expose ports
-EXPOSE 8000
-EXPOSE 8080
-EXPOSE 3000
+EXPOSE 8000  # API Server
+EXPOSE 8080  # Web UI (dev mode)
+EXPOSE 3000  # MCP Server
 
 # Switch to app user
 USER esec

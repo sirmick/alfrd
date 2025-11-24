@@ -11,11 +11,11 @@ class Settings(BaseSettings):
     claude_api_key: str = ""
     openrouter_api_key: str = ""
     
-    # Paths
-    database_path: Path = Path("/data/esec.db")
-    inbox_path: Path = Path("/data/inbox")
-    documents_path: Path = Path("/data/documents")
-    summaries_path: Path = Path("/data/summaries")
+    # Paths - default to ./data for local development
+    database_path: Path = Path("./data/esec.db")
+    inbox_path: Path = Path("./data/inbox")
+    documents_path: Path = Path("./data/documents")
+    summaries_path: Path = Path("./data/summaries")
     
     # API Configuration
     api_host: str = "0.0.0.0"

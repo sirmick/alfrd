@@ -1,10 +1,10 @@
-"""Shared type definitions and enums."""
+"""Shared type definitions for esec Document Secretary."""
 
 from enum import Enum
 from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
-from uuid import UUID, uuid4
+from uuid import UUID
 
 
 class DocumentStatus(str, Enum):
@@ -27,29 +27,19 @@ class DocumentCategory(str, Enum):
 
 class DocumentMetadata(BaseModel):
     """Document metadata model."""
-    id: UUID = Field(default_factory=uuid4)
+    id: UUID
     filename: str
     file_type: str
-    status: DocumentStatus = DocumentStatus.PENDING
+    status: DocumentStatus
     category: Optional[DocumentCategory] = None
     vendor: Optional[str] = None
     amount: Optional[float] = None
     due_date: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    
-    class Config:
-        use_enum_values = True
-
-
-class PeriodType(str, Enum):
-    """Summary period types."""
-    WEEKLY = "weekly"
-    MONTHLY = "monthly"
-    YEARLY = "yearly"
+    created_at: datetime
 
 
 class EventType(str, Enum):
-    """Event types for document processing."""
+    """Processing event types."""
     DOCUMENT_ADDED = "document_added"
     OCR_STARTED = "ocr_started"
     OCR_COMPLETED = "ocr_completed"
@@ -59,3 +49,10 @@ class EventType(str, Enum):
     EXTRACTION_COMPLETED = "extraction_completed"
     SUMMARY_GENERATED = "summary_generated"
     ERROR = "error"
+
+
+class PeriodType(str, Enum):
+    """Summary period types."""
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    YEARLY = "yearly"

@@ -1,33 +1,36 @@
-"""Shared constants for esec."""
-
-from typing import Set
+"""Shared constants for esec Document Secretary."""
 
 # Supported file types
-SUPPORTED_IMAGE_TYPES: Set[str] = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-SUPPORTED_DOCUMENT_TYPES: Set[str] = {".pdf"}
-SUPPORTED_FILE_TYPES: Set[str] = SUPPORTED_IMAGE_TYPES | SUPPORTED_DOCUMENT_TYPES
+SUPPORTED_IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
+SUPPORTED_DOCUMENT_TYPES = {".pdf"}
+ALL_SUPPORTED_TYPES = SUPPORTED_IMAGE_TYPES | SUPPORTED_DOCUMENT_TYPES
 
 # File size limits
-MAX_FILE_SIZE: int = 50 * 1024 * 1024  # 50MB
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
+MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20MB
+MAX_PDF_SIZE = 50 * 1024 * 1024  # 50MB
+
+# MIME type mappings
+MIME_TYPE_MAP = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf"
+}
+
+# Claude Vision API
+CLAUDE_VISION_MODEL = "claude-3-5-sonnet-20241022"
+CLAUDE_MAX_TOKENS = 4096
+
+# Processing timeouts
+OCR_TIMEOUT = 60  # seconds
+MCP_TIMEOUT = 30  # seconds
+EVENT_TIMEOUT = 10  # seconds
 
 # Database
-DEFAULT_DB_PATH: str = "/data/esec.db"
+DB_CONNECTION_TIMEOUT = 5  # seconds
 
-# Directories
-DEFAULT_INBOX_PATH: str = "/data/inbox"
-DEFAULT_DOCUMENTS_PATH: str = "/data/documents"
-DEFAULT_SUMMARIES_PATH: str = "/data/summaries"
-
-# API
-DEFAULT_API_HOST: str = "0.0.0.0"
-DEFAULT_API_PORT: int = 8000
-DEFAULT_MCP_PORT: int = 3000
-
-# Processing
-DEBOUNCE_SECONDS: float = 1.0  # Wait time after file creation
-BATCH_SIZE: int = 10  # Number of documents to process in batch
-
-# LLM
-DEFAULT_MODEL: str = "claude-3-5-sonnet-20241022"
-MAX_TOKENS: int = 4096
-TEMPERATURE: float = 0.0  # Deterministic for extraction tasks
+# Document storage
+DOCUMENT_DATE_FORMAT = "%Y/%m"  # Year/Month directory structure

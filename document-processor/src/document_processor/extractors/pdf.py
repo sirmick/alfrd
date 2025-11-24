@@ -1,26 +1,29 @@
-"""PDF text extraction using pypdf."""
+"""PDF text extraction module."""
 
 from pathlib import Path
 from typing import Dict
 from pypdf import PdfReader
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
 
 class PDFExtractor:
-    """Extract text from PDF documents."""
-    
-    def __init__(self):
-        """Initialize the PDF extractor."""
-        pass
+    """Extract text from PDF files."""
     
     async def extract_text(self, pdf_path: Path) -> Dict:
         """
-        Extract text from PDF file.
+        Extract text from a PDF file.
         
         Args:
             pdf_path: Path to the PDF file
             
         Returns:
-            Dictionary with extracted_text, confidence, and metadata
+            Dictionary containing:
+                - extracted_text: str - The extracted text content
+                - confidence: float - Confidence score (always 1.0 for PDF)
+                - metadata: dict - Additional metadata
         """
         try:
             reader = PdfReader(pdf_path)
@@ -34,49 +37,32 @@ class PDFExtractor:
             
             extracted_text = "\n\n".join(text_parts)
             
+            # Get PDF metadata
+            metadata = {
+                "page_count": len(reader.pages),
+                "extractor": "pypdf",
+                "file_size": pdf_path.stat().st_size
+            }
+            
+            # Add PDF info if available
+            if reader.metadata:
+                pdf_info = {}
+                if reader.metadata.title:
+                    pdf_info["title"] = reader.metadata.title
+                if reader.metadata.author:
+                    pdf_info["author"] = reader.metadata.author
+                if reader.metadata.creator:
+                    pdf_info["creator"] = reader.metadata.creator
+                if reader.metadata.producer:
+                    pdf_info["producer"] = reader.metadata.producer
+                if pdf_info:
+                    metadata["pdf_info"] = pdf_info
+            
             return {
                 "extracted_text": extracted_text.strip(),
-                "confidence": 1.0,  # pypdf extraction is deterministic
-                "metadata": {
-                    "page_count": len(reader.pages),
-                    "extractor": "pypdf",
-                    "has_text": bool(extracted_text.strip())
-                }
+                "confidence": 1.0,  # PDF extraction is deterministic
+                "metadata": metadata
             }
             
         except Exception as e:
-            return {
-                "extracted_text": "",
-                "confidence": 0.0,
-                "metadata": {
-                    "error": str(e),
-                    "extractor": "pypdf"
-                }
-            }
-    
-    def get_pdf_info(self, pdf_path: Path) -> Dict:
-        """
-        Get PDF metadata without extracting text.
-        
-        Args:
-            pdf_path: Path to the PDF file
-            
-        Returns:
-            Dictionary with PDF information
-        """
-        try:
-            reader = PdfReader(pdf_path)
-            metadata = reader.metadata or {}
-            
-            return {
-                "page_count": len(reader.pages),
-                "title": metadata.get("/Title", ""),
-                "author": metadata.get("/Author", ""),
-                "creator": metadata.get("/Creator", ""),
-                "producer": metadata.get("/Producer", ""),
-                "is_encrypted": reader.is_encrypted
-            }
-        except Exception as e:
-            return {
-                "error": str(e)
-            }
+            raise RuntimeError(f"Failed to extract text from PDF: {e}") from e
