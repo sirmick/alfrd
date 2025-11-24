@@ -1,10 +1,10 @@
-# AI Document Secretary (esec)
+# ALFRD - Automated Ledger & Filing Research Database
 
 > Your personal AI-powered document management system that ingests, processes, and summarizes all your documents automatically.
 
-## What is esec?
+## What is ALFRD?
 
-**esec** (Electronic Secretary) is a personal document management system that uses AI to automatically process, categorize, and summarize your documents. Drop a photo of a bill, receipt, or any document into a watched folder, and esec will:
+**ALFRD** (Automated Ledger & Filing Research Database) is a personal document management system that uses AI to automatically process, categorize, and summarize your documents. Drop a photo of a bill, receipt, or any document into a watched folder, and ALFRD will:
 
 - **Extract text** using AI-powered OCR (Claude Vision API)
 - **Categorize** the document (bill, tax document, receipt, insurance, etc.)
@@ -102,8 +102,8 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/esec.git
-cd esec
+git clone https://github.com/yourusername/alfrd.git
+cd alfrd
 
 # Set up environment variables
 cp .env.example .env
@@ -138,9 +138,9 @@ Add to your Claude Desktop MCP configuration:
 ```json
 {
   "mcpServers": {
-    "esec": {
+    "alfrd": {
       "command": "docker",
-      "args": ["exec", "esec-dev", "python", "-m", "mcp_server.main"],
+      "args": ["exec", "alfrd-dev", "python", "-m", "mcp_server.main"],
       "env": {}
     }
   }
@@ -152,7 +152,7 @@ Now ask Claude: "What documents do I have?" or "What bills are due this week?"
 ## Project Structure
 
 ```
-esec/
+alfrd/
 ├── document-processor/    # Watches inbox, extracts text, stores documents
 ├── api-server/           # REST API for document/summary access
 ├── mcp-server/           # MCP server for AI integration
@@ -163,7 +163,7 @@ esec/
     ├── inbox/           # Drop documents here
     ├── documents/       # Processed documents
     ├── summaries/       # Generated summaries
-    └── esec.db          # DuckDB database
+    └── alfrd.db          # DuckDB database
 ```
 
 ## API Examples
@@ -210,7 +210,7 @@ CLAUDE_API_KEY=sk-ant-...           # Claude API key
 OPENROUTER_API_KEY=sk-or-...        # OpenRouter API key (optional)
 
 # Paths
-DATABASE_PATH=/data/esec.db
+DATABASE_PATH=/data/alfrd.db
 INBOX_PATH=/data/inbox
 DOCUMENTS_PATH=/data/documents
 SUMMARIES_PATH=/data/summaries
@@ -405,7 +405,7 @@ docker-compose restart
 docker-compose exec esec python scripts/init-db.py
 
 # Backup database
-cp data/esec.db data/esec.db.backup
+cp data/alfrd.db data/alfrd.db.backup
 ```
 
 ## Contributing
@@ -429,8 +429,8 @@ This project is licensed under the MIT License - see [`LICENSE`](LICENSE) file f
 ## Support
 
 - 📖 **Documentation**: [`ARCHITECTURE.md`](ARCHITECTURE.md)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/yourusername/esec/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/esec/discussions)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/yourusername/alfrd/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/alfrd/discussions)
 - 📧 **Email**: support@example.com
 
 ## Acknowledgments

@@ -1,4 +1,5 @@
-# AI Document Secretary - Architecture Plan
+# ALFRD - Architecture Plan
+**Automated Ledger & Filing Research Database**
 
 ## Executive Summary
 
@@ -157,7 +158,7 @@ A personal document management system with AI-powered processing, structured sto
 ## Project Structure
 
 ```
-esec/
+alfrd/
 ├── README.md
 ├── ARCHITECTURE.md
 ├── docker/                          # Infrastructure subproject
@@ -283,7 +284,7 @@ esec/
     │   ├── weekly/
     │   ├── monthly/
     │   └── yearly/
-    └── esec.db                      # DuckDB database file
+    └── alfrd.db                      # DuckDB database file
 ```
 
 ---
@@ -854,7 +855,7 @@ async def handle_document_processed(event: ProcessedEvent):
 │   └── yearly/
 │       └── 2024-all.md
 │
-└── esec.db                          # DuckDB database
+└── alfrd.db                          # DuckDB database
 ```
 
 **File Naming Convention:**
@@ -882,18 +883,18 @@ RUN apk add --no-cache \
     libffi-dev
 
 # Create app user
-RUN addgroup -g 1000 esec && \
-    adduser -D -u 1000 -G esec esec
+RUN addgroup -g 1000 alfrd && \
+    adduser -D -u 1000 -G alfrd alfrd
 
 # Set working directory
 WORKDIR /app
 
 # Create directory structure
 RUN mkdir -p /data/inbox /data/documents /data/summaries && \
-    chown -R esec:esec /data
+    chown -R alfrd:alfrd /data
 
 # Copy application code
-COPY --chown=esec:esec . /app
+COPY --chown=alfrd:alfrd . /app
 
 # Install Python dependencies
 COPY requirements.txt /app/
@@ -917,7 +918,7 @@ EXPOSE 8080  # Web UI (dev mode)
 EXPOSE 3000  # MCP Server
 
 # Switch to app user
-USER esec
+USER alfrd
 
 # Start supervisord
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
@@ -928,7 +929,7 @@ CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
 ```ini
 [supervisord]
 nodaemon=true
-user=esec
+user=alfrd
 logfile=/data/logs/supervisord.log
 pidfile=/tmp/supervisord.pid
 
@@ -985,11 +986,11 @@ environment=PYTHONUNBUFFERED=1
 version: '3.8'
 
 services:
-  esec:
+  alfrd:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    container_name: esec-dev
+    container_name: alfrd-dev
     ports:
       - "8000:8000"  # API Server
       - "8080:8080"  # Web UI
@@ -1186,7 +1187,7 @@ class TextractExtractor:
 import Dexie from 'dexie';
 
 // IndexedDB schema
-const db = new Dexie('esec');
+const db = new Dexie('alfrd');
 db.version(1).stores({
   documents: 'id, category, created_at, vendor, amount',
   summaries: 'id, period_type, period_start, category',
@@ -1402,7 +1403,7 @@ jinja2 = "^3.1.3"       # Prompt templates
 # .env file
 CLAUDE_API_KEY=sk-ant-...
 OPENROUTER_API_KEY=sk-or-...
-DATABASE_PATH=/data/esec.db
+DATABASE_PATH=/data/alfrd.db
 INBOX_PATH=/data/inbox
 DOCUMENTS_PATH=/data/documents
 SUMMARIES_PATH=/data/summaries
@@ -1418,7 +1419,7 @@ ENV=development
 ```bash
 # Clone and setup
 git clone <repo>
-cd esec
+cd alfrd
 
 # Create virtual environment
 python -m venv .venv
@@ -1500,7 +1501,7 @@ docker-compose up
 
 ## Conclusion
 
-This architecture provides a solid foundation for the AI Document Secretary MVP while being designed to scale to multi-user production deployment. The key innovations are:
+This architecture provides a solid foundation for the ALFRD (Automated Ledger & Filing Research Database) MVP while being designed to scale to multi-user production deployment. The key innovations are:
 
 1. **Isolated per-user containers** for data privacy and scalability
 2. **Async event-driven architecture** for reliable document processing

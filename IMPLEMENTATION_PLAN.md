@@ -1,6 +1,6 @@
 # Implementation Plan - Commit-by-Commit Build Guide
 
-This document breaks down the implementation of the AI Document Secretary system into atomic, testable commits. Each commit represents a working milestone that can be deployed and tested independently.
+This document breaks down the implementation of the ALFRD (Automated Ledger & Filing Research Database) system into atomic, testable commits. Each commit represents a working milestone that can be deployed and tested independently.
 
 ## Branch Strategy
 
