@@ -13,8 +13,10 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to path (go up to esec/)
+_script_dir = Path(__file__).resolve()
+_project_root = _script_dir.parent.parent.parent.parent.parent  # cli/ -> document_processor/ -> src/ -> document-processor/ -> esec/
+sys.path.insert(0, str(_project_root))
 
 from shared.config import Settings
 import duckdb
