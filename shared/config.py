@@ -33,6 +33,22 @@ class Settings(BaseSettings):
     bedrock_model_id: str = "us.amazon.nova-lite-v1:0"  # Using Nova Lite inference profile
     bedrock_max_tokens: int = 4096
     
+    # Worker Pool Configuration
+    # OCR workers (AWS Textract concurrency limit)
+    ocr_workers: int = 3
+    ocr_poll_interval: int = 5  # seconds
+    
+    # Classifier workers (Bedrock API concurrency limit)
+    classifier_workers: int = 5
+    classifier_poll_interval: int = 2  # seconds
+    
+    # Workflow workers (document-specific processing)
+    workflow_workers: int = 3
+    workflow_poll_interval: int = 5  # seconds
+    
+    # Worker batch sizes (documents to fetch per poll)
+    worker_batch_multiplier: int = 2  # batch_size = workers * multiplier
+    
     # Logging
     log_level: str = "INFO"
     env: str = "development"
