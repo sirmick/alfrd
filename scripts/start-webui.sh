@@ -1,0 +1,60 @@
+#!/bin/bash
+# Start the ALFRD Web UI (Ionic PWA) development server
+
+# Get script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$SCRIPT_DIR/.."
+WEBUI_DIR="$PROJECT_ROOT/web-ui"
+
+echo "=================================="
+echo "🌐 Starting ALFRD Web UI"
+echo "=================================="
+echo ""
+
+# Check if Node.js is installed
+if ! command -v node &> /dev/null; then
+    echo "❌ Error: Node.js is not installed"
+    echo "   Please install Node.js 20+ to run the Web UI"
+    exit 1
+fi
+
+# Check Node version
+NODE_VERSION=$(node --version | cut -d'v' -f2 | cut -d'.' -f1)
+if [ "$NODE_VERSION" -lt 20 ]; then
+    echo "⚠️  Warning: Node.js $NODE_VERSION detected, but version 20+ is recommended"
+    echo "   Some features may not work correctly"
+    echo ""
+fi
+
+# Check if web-ui directory exists
+if [ ! -d "$WEBUI_DIR" ]; then
+    echo "❌ Error: Web UI directory not found at $WEBUI_DIR"
+    exit 1
+fi
+
+# Check if node_modules exists
+if [ ! -d "$WEBUI_DIR/node_modules" ]; then
+    echo "📦 Installing Web UI dependencies..."
+    echo ""
+    cd "$WEBUI_DIR"
+    npm install
+    if [ $? -ne 0 ]; then
+        echo ""
+        echo "❌ Error: Failed to install dependencies"
+        exit 1
+    fi
+    echo ""
+fi
+
+# Start the dev server
+echo "🚀 Starting Vite dev server..."
+echo "   URL: http://localhost:3000"
+echo "   API Proxy: /api/* → http://localhost:8000"
+echo ""
+echo "   Make sure API server is running on port 8000!"
+echo ""
+echo "Press Ctrl+C to stop"
+echo ""
+
+cd "$WEBUI_DIR"
+npm run dev
