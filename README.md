@@ -107,7 +107,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/alfrd.git
+git clone https://github.com/sirmick/alfrd.git
 cd alfrd
 
 # Set up environment variables
@@ -456,8 +456,8 @@ This project is licensed under the MIT License - see [`LICENSE`](LICENSE) file f
 ## Support
 
 - 📖 **Documentation**: [`ARCHITECTURE.md`](ARCHITECTURE.md)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/yourusername/alfrd/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/alfrd/discussions)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/sirmick/alfrd/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/sirmick/alfrd/discussions)
 - 📧 **Email**: support@example.com
 
 ## Acknowledgments

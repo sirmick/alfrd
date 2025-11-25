@@ -1,6 +1,30 @@
-# AI Document Secretary - Development Progress
+# ALFRD - Development Progress
 
 **Last Updated:** 2024-11-24
+
+## Recent Architecture Changes (November 2024)
+
+### AWS Migration Completed
+- **AWS Textract OCR**: Replaced Claude Vision with AWS Textract for production-quality OCR
+- **AWS Bedrock LLM**: Using Amazon Nova Lite (`us.amazon.nova-lite-v1:0`) for document classification
+- **Multi-model support**: BedrockClient supports both Claude and Nova models automatically
+- **Folder-based input**: Documents organized in folders with `meta.json` metadata
+- **Simplified classification**: 3-type system (junk, bill, finance) instead of 6 categories
+- **Pipeline status tracking**: 8-state progression (pending → ocr_started → ocr_completed → classifying → classified → processing → completed/failed)
+
+### Recent Commits (7 total, ready to push)
+1. ✅ Documentation updates - ALFRD rename and backronym
+2. ✅ Shared types and constants - 8-state pipeline, 3-type classification
+3. ✅ Database schema - Extended for detailed status tracking
+4. ✅ AWS Textract extractor - OCR implementation with boto3
+5. ✅ Bedrock LLM client - Multi-model support (Claude + Nova)
+6. ✅ MCP classifier tool - Document classification with retry logic
+7. ✅ Dependencies and config - AWS setup, multi-model support
+
+### Test Infrastructure
+- ✅ `mcp-server/test_classifier.py` - Standalone test for Bedrock classification
+- ✅ Tests 3 sample documents (electric bill, pizza flyer, bank statement)
+- ✅ Validates complete Bedrock → classification pipeline
 
 ## Phase 1: Core Infrastructure - IN PROGRESS
 
