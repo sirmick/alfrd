@@ -1,6 +1,6 @@
 # ALFRD - Automated Ledger & Filing Research Database
 
-> Your personal AI-powered document management system that ingests, processes, and summarizes documents automatically using AWS Textract OCR and LLM classification.
+> Your personal AI-powered document management system that ingests, processes, and summarizes documents automatically using AWS Textract OCR and LLM classification via AWS Bedrock.
 
 ## What is ALFRD?
 
@@ -8,10 +8,10 @@
 
 - **Extract text** using AWS Textract OCR with block-level data preservation
 - **Process folders** with multiple documents (multi-page bills, receipts, etc.)
-- **Classify via MCP** using LLM-powered document type detection (coming soon)
-- **Extract structured data** (vendor, amount, due date, account numbers) (coming soon)
+- **Classify via MCP** using LLM-powered document type detection (AWS Bedrock)
+- **Extract structured data** (vendor, amount, due date, line items) from bills automatically
 - **Store in DuckDB** with full-text search capability
-- **Preserve for LLMs** with combined text + block-level structure
+- **Preserve for LLMs** with combined text + block-level structure for spatial reasoning
 
 ## Quick Start
 
@@ -105,26 +105,30 @@ User adds document → Folder created in inbox
 
 ## Key Features
 
-### ✅ Currently Working
+### ✅ Phase 1B Complete - Worker Pool Architecture
 
+- **Worker pool architecture** - State-machine-driven parallel processing
+- **OCRWorker** - AWS Textract OCR with 95%+ accuracy
+- **ClassifierWorker** - MCP document classification via AWS Bedrock
+- **WorkflowWorker** - Type-specific handlers (Bill, Finance, Junk)
+- **Bill summarization** - Automatic extraction of vendor, amount, due date, line items
 - **Folder-based document input** with `meta.json` metadata
-- **AWS Textract OCR** with 95%+ accuracy
 - **Block-level data preservation** (PAGE, LINE, WORD with bounding boxes)
 - **Multi-document folders** (process multiple images as single document)
-- **DuckDB storage** with full-text search capability
-- **LLM-optimized format** for AI processing
+- **DuckDB storage** with full-text search and structured data
+- **LLM-optimized format** for AI processing with spatial reasoning
 - **Comprehensive logging** with timestamps
-- **Test suite** with pytest (5/5 tests passing)
+- **Test suite** with pytest (11/11 tests passing)
 - **Standalone execution** (no PYTHONPATH setup needed)
 
-### ⏳ Coming Soon
+### ⏳ Phase 2 - Coming Soon
 
-- MCP server integration for classification
-- Structured data extraction (vendor, amount, dates)
+- PWA interface with camera capture
+- Image upload API endpoint
 - Hierarchical summaries (weekly → monthly → yearly)
 - Financial tracking with CSV exports
-- Web UI with React
-- Real-time file watching
+- Integration tests for full pipeline
+- Real-time file watching (watchdog)
 
 ## Project Structure
 
@@ -286,7 +290,7 @@ No wrapper scripts or environment setup needed!
 
 ## Roadmap
 
-### Phase 1: Core Document Processing ✅
+### Phase 1A: Core Document Processing ✅
 - [x] Folder-based document input
 - [x] AWS Textract OCR
 - [x] LLM-optimized output format
@@ -294,11 +298,20 @@ No wrapper scripts or environment setup needed!
 - [x] Test suite
 - [x] Helper scripts
 
-### Phase 2: AI Integration (In Progress)
-- [ ] MCP server integration
-- [ ] Document classification
-- [ ] Structured data extraction
-- [ ] Event-driven architecture
+### Phase 1B: Worker Pool Architecture ✅
+- [x] BaseWorker + WorkerPool classes
+- [x] OCRWorker with AWS Textract
+- [x] ClassifierWorker with MCP integration
+- [x] WorkflowWorker with type-specific handlers
+- [x] MCP tools (classify_document, summarize_bill)
+- [x] BedrockClient for AWS Bedrock API
+- [x] Main orchestrator running all workers
+
+### Phase 2: PWA Interface (Next)
+- [ ] Ionic PWA with camera capture
+- [ ] Image upload API endpoint
+- [ ] Mobile photo workflow
+- [ ] Integration tests
 
 ### Phase 3: Analytics & UI
 - [ ] Hierarchical summaries
@@ -335,10 +348,12 @@ See `api-server/src/api_server/db/schema.sql` for complete schema.
 
 ## Statistics
 
-- **Lines of Code**: ~1,460 lines (core processor + tests)
-- **Test Coverage**: 100% for storage module (5/5 passing)
+- **Lines of Code**: ~2,874 lines (core + workers + MCP tools)
+- **Test Coverage**: 11/11 tests passing (storage + worker infrastructure)
 - **OCR Accuracy**: 95%+ with AWS Textract
 - **Processing Speed**: ~2-3 seconds per page
+- **Worker Architecture**: 3 workers (OCR, Classifier, Workflow)
+- **MCP Integration**: Bedrock with Claude Sonnet 4 + Amazon Nova
 
 ## Contributing
 

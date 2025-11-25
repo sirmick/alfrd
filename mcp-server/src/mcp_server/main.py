@@ -14,26 +14,22 @@ settings = Settings()
 
 def run_server():
     """Run the MCP server."""
-    print(f"🤖 Starting esec MCP Server")
-    print(f"   Port: {settings.mcp_port}")
+    print(f"🤖 MCP Server Information")
     print(f"   Environment: {settings.env}")
     print()
-    print("⚠️  MCP Server implementation coming soon!")
-    print("   This server will handle:")
-    print("   - Document categorization")
-    print("   - Structured data extraction")
-    print("   - Summary generation")
-    print("   - Natural language queries")
+    print("ℹ️  Note: MCP functionality is integrated directly into workers")
+    print("   The MCP server doesn't need to run as a separate process.")
     print()
-    
-    # TODO: Implement actual MCP server
-    # For now, just keep the process alive
-    try:
-        import time
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n👋 MCP Server shutting down")
+    print("   MCP tools are called by:")
+    print("   - ClassifierWorker → classify_document()")
+    print("   - WorkflowWorker → summarize_bill(), etc.")
+    print()
+    print("   To test MCP tools directly:")
+    print("   >>> from mcp_server.tools.classify_document import classify_document")
+    print("   >>> from mcp_server.tools.summarize_bill import summarize_bill")
+    print("   >>> from mcp_server.llm import BedrockClient")
+    print()
+    print("✅ No separate MCP server process needed!")
 
 
 if __name__ == "__main__":

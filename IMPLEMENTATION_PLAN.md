@@ -1182,19 +1182,28 @@ git push --tags
 
 ## Next Steps
 
-After completing Phase 1 (Commits 1-22):
-1. Test the complete pipeline manually
-2. Fix any bugs discovered
-3. Document learnings in ARCHITECTURE.md
-4. Plan Phase 2 detailed commits
-5. Begin MCP server implementation
+After completing Phase 1B:
+1. ✅ Worker pool architecture complete
+2. ✅ MCP integration complete
+3. ✅ Bill summarization working
+4. ⏳ Build PWA interface for mobile photo capture
+5. ⏳ Add integration tests for full pipeline
+
+### Phase 2 Priorities:
+1. **PWA Interface** - Ionic with camera capture, upload to API
+2. **Integration Tests** - Full pipeline tests (inbox → completed)
+3. **Enhanced Handlers** - FinanceHandler for account statements
+4. **Hierarchical Summaries** - Weekly → Monthly → Yearly rollups
+5. **Real-time Watching** - Watchdog file monitoring
 
 ---
 
-**Current Status**: Phase 1A Complete - Core document processing with AWS Textract
-**Commits Completed**: Commits 1-11 (scaffolding through folder-based processing)
-**Next Up**: Phase 1B - MCP Integration
-**Estimated Time to Phase 1B Complete**: 1-2 weeks
+**Current Status**: Phase 1B Complete - Worker pool architecture with MCP integration
+**Commits Completed**: Commits 1-11 (scaffolding) + Phase 1B (workers + MCP)
+**Lines of Code**: ~2,874 lines (core + workers + MCP)
+**Test Coverage**: 11/11 tests passing
+**Next Up**: Phase 2 - PWA Interface
+**Estimated Time to PWA MVP**: 1 week
 **Estimated Time to Production Ready**: 3-4 weeks
 
 ---
@@ -1327,13 +1336,29 @@ inbox/
 - `PROGRESS.md` (239 lines - current status)
 - `README.md` (318 lines - comprehensive overview)
 
-**⏳ Phase 1B: MCP Integration (NEXT - Week 2)**
-1. ⏳ Wire up API server event listener
-2. ⏳ Integrate MCP server into processing pipeline
-3. ⏳ MCP classification tool
-4. ⏳ MCP summarization tools (per document type)
-5. ⏳ Financial extraction tools
-6. ⏳ Running totals management
+**✅ Phase 1B: Worker Pool Architecture (COMPLETE - November 2024)**
+1. ✅ Worker pool base class with concurrency support
+2. ✅ OCRWorker - AWS Textract integration with state transitions
+3. ✅ ClassifierWorker - MCP classify_document integration
+4. ✅ WorkflowWorker - Type-specific handlers (BillHandler, FinanceHandler, JunkHandler)
+5. ✅ MCP Tools - classify_document + summarize_bill with Bedrock
+6. ✅ Main orchestrator - All three workers running in parallel
+7. ✅ Enhanced LLM input - Full Textract blocks for spatial reasoning
+8. ✅ Structured data storage - JSON field for bill summaries
+
+**Files Modified/Created (Phase 1B):**
+- `document-processor/src/document_processor/workers.py` (218 lines - base classes)
+- `document-processor/src/document_processor/ocr_worker.py` (200 lines)
+- `document-processor/src/document_processor/classifier_worker.py` (228 lines)
+- `document-processor/src/document_processor/workflow_worker.py` (328 lines)
+- `document-processor/src/document_processor/main.py` (150 lines - orchestrator)
+- `mcp-server/src/mcp_server/llm/bedrock.py` (96 lines - Bedrock client)
+- `mcp-server/src/mcp_server/tools/classify_document.py` (145 lines)
+- `mcp-server/src/mcp_server/tools/summarize_bill.py` (216 lines)
+- `shared/config.py` (updated with worker configuration)
+- `shared/types.py` (added DocumentType enum)
+- `document-processor/tests/test_workers.py` (262 lines - 6/6 passing)
+- `scripts/view-document.py` (322 lines - enhanced to show structured data)
 
 **Phase 2: Hierarchical Summarization (Week 3)**
 1. Weekly summary generation

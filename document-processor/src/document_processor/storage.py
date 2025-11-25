@@ -91,14 +91,14 @@ class DocumentStorage:
         # Calculate total file size
         total_size = sum(f.stat().st_size for f in folder_path.rglob('*') if f.is_file())
         
-        # Insert into database
+        # Insert into database with PENDING status for worker processing
         conn = duckdb.connect(str(self.db_path))
         try:
             conn.execute("""
                 INSERT INTO documents (
                     id, filename, original_path, file_type, file_size,
                     status, raw_document_path, extracted_text_path,
-                    metadata_path, extracted_text, created_at
+                    metadata_path, folder_path, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 doc_id,
@@ -106,11 +106,11 @@ class DocumentStorage:
                 str(folder_path),
                 'folder',  # Indicate this is a multi-document folder
                 total_size,
-                DocumentStatus.PROCESSING,
+                DocumentStatus.PENDING,  # Start in PENDING for OCR worker
                 str(raw_path),
                 str(text_file),
                 str(meta_file),
-                llm_formatted['full_text'],
+                str(folder_path),  # Save original folder path for worker
                 now
             ])
         finally:
