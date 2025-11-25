@@ -71,16 +71,32 @@ class TextractExtractor:
             
             # Parse response blocks
             lines = []
+            blocks_by_type = {'PAGE': [], 'LINE': [], 'WORD': []}
             total_confidence = 0
             line_count = 0
             word_count = 0
             
             for block in response['Blocks']:
-                if block['BlockType'] == 'LINE':
+                block_type = block['BlockType']
+                
+                # Store block information
+                block_info = {
+                    'id': block.get('Id'),
+                    'type': block_type,
+                    'text': block.get('Text', ''),
+                    'confidence': block.get('Confidence', 0),
+                    'geometry': block.get('Geometry', {})
+                }
+                
+                if block_type in blocks_by_type:
+                    blocks_by_type[block_type].append(block_info)
+                
+                # Collect lines for text extraction
+                if block_type == 'LINE':
                     lines.append(block['Text'])
                     total_confidence += block.get('Confidence', 0)
                     line_count += 1
-                elif block['BlockType'] == 'WORD':
+                elif block_type == 'WORD':
                     word_count += 1
             
             # Join lines into full text
@@ -95,6 +111,7 @@ class TextractExtractor:
             return {
                 'extracted_text': extracted_text,
                 'confidence': avg_confidence,
+                'blocks': blocks_by_type,
                 'metadata': {
                     'extractor': 'aws_textract',
                     'pages': doc_metadata.get('Pages', 1),

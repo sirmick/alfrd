@@ -29,24 +29,33 @@ class DocumentStorage:
         self.settings = settings
         self.db_path = settings.database_path
     
-    async def store_document(self, source_path: Path, extracted_data: Dict) -> str:
+    async def store_document_folder(
+        self,
+        folder_path: Path,
+        doc_id: str,
+        meta: Dict,
+        extracted_documents: list,
+        llm_formatted: Dict
+    ) -> str:
         """
-        Store document and extracted data.
+        Store document folder with extracted data in LLM-optimized format.
         
         Args:
-            source_path: Path to the original document
-            extracted_data: Dictionary with extracted text and metadata
+            folder_path: Path to the document folder
+            doc_id: Document ID from meta.json
+            meta: Metadata from meta.json
+            extracted_documents: List of extracted document data
+            llm_formatted: LLM-optimized combined data
             
         Returns:
-            Document ID (UUID)
+            Document ID
         """
-        doc_id = str(uuid4())
         now = datetime.utcnow()
         year_month = now.strftime("%Y/%m")
         
         # Create storage paths
         base_path = self.settings.documents_path / year_month
-        raw_path = base_path / "raw"
+        raw_path = base_path / "raw" / doc_id
         text_path = base_path / "text"
         meta_path = base_path / "meta"
         
@@ -54,17 +63,33 @@ class DocumentStorage:
         for path in [raw_path, text_path, meta_path]:
             path.mkdir(parents=True, exist_ok=True)
         
-        # Copy original file
-        dest_file = raw_path / f"{doc_id}{source_path.suffix}"
-        shutil.copy2(source_path, dest_file)
+        # Copy entire folder to raw storage
+        shutil.copytree(folder_path, raw_path, dirs_exist_ok=True)
         
-        # Save extracted text
+        # Save combined text for full-text search
         text_file = text_path / f"{doc_id}.txt"
-        text_file.write_text(extracted_data["extracted_text"])
+        text_file.write_text(llm_formatted['full_text'])
         
-        # Save metadata
+        # Save LLM-formatted data for AI processing
+        llm_file = text_path / f"{doc_id}_llm.json"
+        llm_file.write_text(json.dumps(llm_formatted, indent=2))
+        
+        # Save detailed metadata including blocks
+        detailed_meta = {
+            'original_meta': meta,
+            'extracted_documents': extracted_documents,
+            'llm_formatted_summary': {
+                'document_count': llm_formatted['document_count'],
+                'total_chars': llm_formatted['total_chars'],
+                'avg_confidence': llm_formatted['avg_confidence']
+            },
+            'processed_at': now.isoformat()
+        }
         meta_file = meta_path / f"{doc_id}.json"
-        meta_file.write_text(json.dumps(extracted_data["metadata"], indent=2))
+        meta_file.write_text(json.dumps(detailed_meta, indent=2))
+        
+        # Calculate total file size
+        total_size = sum(f.stat().st_size for f in folder_path.rglob('*') if f.is_file())
         
         # Insert into database
         conn = duckdb.connect(str(self.db_path))
@@ -73,21 +98,20 @@ class DocumentStorage:
                 INSERT INTO documents (
                     id, filename, original_path, file_type, file_size,
                     status, raw_document_path, extracted_text_path,
-                    metadata_path, extracted_text, created_at, mime_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    metadata_path, extracted_text, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 doc_id,
-                source_path.name,
-                str(source_path),
-                extracted_data.get("file_type", "unknown"),
-                source_path.stat().st_size,
+                folder_path.name,
+                str(folder_path),
+                'folder',  # Indicate this is a multi-document folder
+                total_size,
                 DocumentStatus.PROCESSING,
-                str(dest_file),
+                str(raw_path),
                 str(text_file),
                 str(meta_file),
-                extracted_data["extracted_text"],
-                now,
-                extracted_data.get("mime_type", "")
+                llm_formatted['full_text'],
+                now
             ])
         finally:
             conn.close()
