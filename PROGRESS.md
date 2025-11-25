@@ -2,6 +2,31 @@
 
 **Last Updated:** 2024-11-25
 
+## Current Phase: Worker Pool Architecture (Phase 1B) 🚧
+
+### Worker Pool Infrastructure - IN PROGRESS
+
+**Commits:**
+- `f66f19d` - Folder-based processing with AWS Textract OCR ✅
+- `e38ed47` - Worker pool base class with tests (6/6 passing) ✅
+- `b2caf0f` - OCRWorker implementation ✅
+
+**Status:**
+- ✅ **BaseWorker** - Abstract base class for DB-driven polling workers
+- ✅ **WorkerPool** - Manages multiple workers concurrently
+- ✅ **OCRWorker** - Processes `pending` → `ocr_completed` with AWS Textract
+- ⏳ **ClassifierWorker** - Next: MCP integration for classification
+- ⏳ **WorkflowWorker** - Next: Type-specific handlers (bill/finance/junk)
+- ⏳ **Main orchestrator** - Next: Run all workers concurrently
+
+**Architecture:** State-machine-driven parallel workers
+- Workers poll database for documents in specific status
+- Process in parallel with configurable concurrency
+- State transitions tracked in DB for observability/recovery
+- See [`DOCUMENT_PROCESSING_DESIGN.md`](DOCUMENT_PROCESSING_DESIGN.md) for complete design
+
+---
+
 ## Recent Major Update (November 2024)
 
 ### Document Processor Overhaul - COMPLETED ✅
@@ -97,13 +122,18 @@ data/documents/2024/11/
 3. **Event emission** - Code exists but API not listening
 4. **Watcher mode** - Stub only, use batch mode for now
 
+### 🚧 In Progress (Phase 1B)
+
+1. **Worker Pool Architecture** - BaseWorker + WorkerPool ✅, OCRWorker ✅
+2. **ClassifierWorker** - MCP integration for document classification
+3. **WorkflowWorker** - Type-specific handlers (bill/finance/junk)
+
 ### ❌ Not Yet Implemented
 
 1. **Web UI** - Not started
-2. **Real-time file watching** - Use batch mode instead
-3. **MCP classification integration** - MCP server not wired up
-4. **Hierarchical summaries** - Not started
-5. **Analytics** - Not started
+2. **Real-time file watching** - Use batch mode with workers
+3. **Hierarchical summaries** - Not started
+4. **Analytics** - Not started
 
 ## Test Results
 
@@ -146,32 +176,35 @@ python samples/test_ocr.py samples/pg\&e-bill.jpg
 
 ## Statistics
 
-**Lines of Code:**
-- Document Processor: ~800 lines (main.py, storage.py, detector.py, extractors)
-- Tests: ~310 lines (test_storage.py)
+**Lines of Code (Phase 1A + 1B):**
+- Document Processor Core: ~800 lines (main.py, storage.py, detector.py, extractors)
+- Worker Infrastructure: ~418 lines (workers.py, ocr_worker.py)
+- Tests: ~480 lines (test_storage.py, test_workers.py)
 - Helper Scripts: ~350 lines (add-document.py, test_ocr.py)
-- **Total New/Modified: ~1,460 lines**
+- **Total New/Modified: ~2,050 lines**
 
 **Test Coverage:**
 - Storage module: 100% (5/5 tests passing)
-- Other modules: 0% (tests not yet written)
+- Worker infrastructure: 100% (6/6 tests passing)
+- **Total: 11/11 tests passing** ✅
+- Integration tests: 0% (not yet written)
 
 ## Next Steps
 
-### Immediate (Phase 1 Completion)
-1. ✅ Document processor with folder structure - DONE
-2. ✅ AWS Textract OCR - DONE
-3. ✅ LLM-optimized output format - DONE
-4. ✅ Test suite - DONE
-5. ⏳ Update all documentation - IN PROGRESS
-6. ⏳ Commit changes - PENDING
+### Immediate (Phase 1B - Worker Architecture)
+1. ✅ Worker pool base class - DONE
+2. ✅ OCRWorker implementation - DONE
+3. ⏳ ClassifierWorker with MCP integration - NEXT
+4. ⏳ WorkflowWorker with type handlers - PENDING
+5. ⏳ Update main.py orchestrator - PENDING
+6. ⏳ Integration tests - PENDING
 
-### Short Term (Phase 2)
-1. Wire up MCP server to processor events
-2. Implement classification integration
-3. Add structured data extraction
-4. Implement event listener in API server
-5. Add more comprehensive tests
+### Short Term (Phase 2 - MCP Integration)
+1. Wire up ClassifierWorker → MCP server
+2. Implement WorkflowWorker type-specific handlers
+3. Add BillHandler and FinanceHandler
+4. Implement summary generation
+5. Add comprehensive integration tests
 
 ### Medium Term (Phase 3)
 1. Hierarchical summaries (weekly/monthly/yearly)
