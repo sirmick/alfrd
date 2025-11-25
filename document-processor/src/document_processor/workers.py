@@ -210,7 +210,7 @@ class WorkerPool:
         logger.info(f"Added {worker.worker_name} to pool")
     
     async def start(self):
-        """Start all workers concurrently."""
+        """Start all workers concurrently (runs indefinitely)."""
         logger.info(f"Starting worker pool with {len(self.workers)} workers")
         
         self.tasks = [
@@ -220,6 +220,64 @@ class WorkerPool:
         
         # Wait for all workers (runs indefinitely)
         await asyncio.gather(*self.tasks, return_exceptions=True)
+    
+    async def start_once(self):
+        """Start all workers and exit when no work remains."""
+        logger.info(f"Starting worker pool in run-once mode with {len(self.workers)} workers")
+        
+        import duckdb
+        max_iterations = 100  # Safety limit to prevent infinite loops
+        iteration = 0
+        
+        while iteration < max_iterations:
+            iteration += 1
+            
+            # Check if there's any pending work
+            conn = duckdb.connect(str(self.workers[0].settings.database_path))
+            try:
+                # Count documents that aren't in completed or failed status
+                result = conn.execute("""
+                    SELECT COUNT(*)
+                    FROM documents
+                    WHERE status NOT IN ('completed', 'failed')
+                """).fetchone()
+                
+                pending_count = result[0] if result else 0
+            finally:
+                conn.close()
+            
+            if pending_count == 0:
+                logger.info("No pending documents, run-once mode complete")
+                print("\n✅ All documents processed, exiting...")
+                break
+            
+            logger.info(f"Run-once iteration {iteration}: {pending_count} documents pending")
+            
+            # Process one batch from each worker
+            tasks = []
+            for worker in self.workers:
+                # Get documents for this worker
+                documents = await worker.get_documents(
+                    status=worker.source_status,
+                    limit=worker.concurrency
+                )
+                
+                if documents:
+                    # Process them
+                    tasks.extend([
+                        worker.process_document(doc)
+                        for doc in documents[:worker.concurrency]
+                    ])
+            
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Brief sleep between iterations
+            await asyncio.sleep(1)
+        
+        if iteration >= max_iterations:
+            logger.warning(f"Run-once mode reached max iterations ({max_iterations})")
+            print(f"\n⚠️  Reached maximum iterations ({max_iterations}), exiting...")
     
     async def stop(self):
         """Stop all workers gracefully."""

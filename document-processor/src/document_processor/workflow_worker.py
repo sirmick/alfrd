@@ -1,4 +1,17 @@
-"""Workflow Worker - Processes classified documents with type-specific handlers."""
+"""Workflow Worker - DEPRECATED - Replaced by SummarizerWorker and scorer workers.
+
+This file is kept for backward compatibility but is no longer used in the new
+self-improving prompt architecture. The new pipeline is:
+
+OCR → Classify → Score Classification → Summarize → Score Summary → Complete
+
+See:
+- summarizer_worker.py - Generic DB-driven summarization
+- scorer_workers.py - ClassifierScorerWorker and SummarizerScorerWorker
+
+Previous architecture used hardcoded handlers (BillHandler, FinanceHandler, JunkHandler).
+New architecture uses DB-stored prompts that evolve based on performance feedback.
+"""
 
 import asyncio
 import logging
@@ -17,10 +30,9 @@ sys.path.insert(0, str(_script_dir / "mcp-server" / "src"))
 from shared.config import Settings
 from shared.types import DocumentStatus, DocumentType
 from document_processor.workers import BaseWorker
-from mcp_server.llm import BedrockClient
-from mcp_server.tools.summarize_bill import summarize_bill_with_retry
 
 logger = logging.getLogger(__name__)
+logger.warning("WorkflowWorker is DEPRECATED - use SummarizerWorker and scorer workers instead")
 
 
 class WorkflowHandler:

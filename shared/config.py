@@ -40,14 +40,27 @@ class Settings(BaseSettings):
     
     # Classifier workers (Bedrock API concurrency limit)
     classifier_workers: int = 5
-    classifier_poll_interval: int = 2  # seconds
+    classifier_poll_interval: int = 3  # seconds
     
-    # Workflow workers (document-specific processing)
-    workflow_workers: int = 3
-    workflow_poll_interval: int = 5  # seconds
+    # Classifier scorer workers (evaluate classification quality)
+    classifier_scorer_workers: int = 3
+    classifier_scorer_poll_interval: int = 5  # seconds
+    
+    # Summarizer workers (document-specific summarization)
+    summarizer_workers: int = 3
+    summarizer_poll_interval: int = 3  # seconds
+    
+    # Summarizer scorer workers (evaluate summary quality)
+    summarizer_scorer_workers: int = 2
+    summarizer_scorer_poll_interval: int = 5  # seconds
     
     # Worker batch sizes (documents to fetch per poll)
     worker_batch_multiplier: int = 2  # batch_size = workers * multiplier
+    
+    # Prompt Evolution Configuration
+    classifier_prompt_max_words: int = 300  # Max words for classifier prompt
+    min_documents_for_scoring: int = 1  # Min documents before scoring prompts (set to 1 for testing)
+    prompt_update_threshold: float = 0.05  # Min score improvement to update prompt
     
     # Logging
     log_level: str = "INFO"

@@ -39,10 +39,12 @@ def view_document(doc_id: str, settings: Settings):
             SELECT
                 id, filename, status, document_type,
                 classification_confidence, classification_reasoning,
+                suggested_type, secondary_tags,
                 vendor, amount, due_date,
                 created_at, updated_at, processed_at,
                 extracted_text, extracted_text_path,
-                folder_path, error_message, structured_data
+                folder_path, error_message, structured_data,
+                tags, folder_metadata
             FROM documents
             WHERE id = ? OR id LIKE ?
         """, [doc_id, f"{doc_id}%"]).fetchone()
@@ -53,8 +55,10 @@ def view_document(doc_id: str, settings: Settings):
         
         # Unpack results
         (id, filename, status, doc_type, confidence, reasoning,
+         suggested_type, secondary_tags,
          vendor, amount, due_date, created, updated, processed,
-         text, text_path, folder, error, structured_data) = result
+         text, text_path, folder, error, structured_data,
+         tags, folder_metadata) = result
         
         # Display header
         print("\n" + "=" * 80)
@@ -75,13 +79,37 @@ def view_document(doc_id: str, settings: Settings):
         print()
         
         # Classification
-        if doc_type or confidence or reasoning:
+        if doc_type or confidence or reasoning or suggested_type or secondary_tags:
             print("🏷️  CLASSIFICATION")
             print("-" * 80)
             if doc_type:
                 print(format_field("Type", doc_type.upper()))
             if confidence:
                 print(format_field("Confidence", f"{confidence:.1%}"))
+            if suggested_type:
+                print(format_field("Suggested Type", suggested_type.upper()))
+            if secondary_tags:
+                import json
+                try:
+                    if isinstance(secondary_tags, str):
+                        tags_list = json.loads(secondary_tags)
+                    else:
+                        tags_list = secondary_tags
+                    if tags_list:
+                        print(format_field("Secondary Tags", ", ".join(tags_list)))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if tags:
+                import json
+                try:
+                    if isinstance(tags, str):
+                        tags_list = json.loads(tags)
+                    else:
+                        tags_list = tags
+                    if tags_list:
+                        print(format_field("User Tags", ", ".join(tags_list)))
+                except (json.JSONDecodeError, TypeError):
+                    pass
             if reasoning:
                 print(format_field("Reasoning", ""))
                 # Word wrap reasoning

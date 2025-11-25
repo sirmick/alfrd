@@ -9,14 +9,18 @@ from uuid import UUID
 
 class DocumentStatus(str, Enum):
     """Document processing status - tracks pipeline progress."""
-    PENDING = "pending"                # Document folder detected
-    OCR_STARTED = "ocr_started"        # AWS Textract called
-    OCR_COMPLETED = "ocr_completed"    # Text extracted
-    CLASSIFYING = "classifying"        # MCP classification in progress
-    CLASSIFIED = "classified"          # Type determined
-    PROCESSING = "processing"          # Type-specific handler processing
-    COMPLETED = "completed"            # All processing done
-    FAILED = "failed"                  # Error at any stage
+    PENDING = "pending"                         # Document folder detected
+    OCR_STARTED = "ocr_started"                 # AWS Textract called
+    OCR_COMPLETED = "ocr_completed"             # Text extracted
+    CLASSIFYING = "classifying"                 # MCP classification in progress
+    CLASSIFIED = "classified"                   # Type determined
+    SCORING_CLASSIFICATION = "scoring_classification"  # Scoring classifier performance
+    SCORED_CLASSIFICATION = "scored_classification"    # Classifier scored and prompt updated
+    SUMMARIZING = "summarizing"                 # Generating summary
+    SUMMARIZED = "summarized"                   # Summary generated
+    SCORING_SUMMARY = "scoring_summary"         # Scoring summarizer performance
+    COMPLETED = "completed"                     # All processing done
+    FAILED = "failed"                           # Error at any stage
 
 
 class DocumentType(str, Enum):
@@ -61,9 +65,53 @@ class DocumentMetadata(BaseModel):
 
 class ClassificationResult(BaseModel):
     """Result from MCP document classification."""
-    document_type: DocumentType
+    document_type: str  # Changed from DocumentType to allow dynamic types
     confidence: float
     reasoning: str
+    suggested_type: Optional[str] = None  # New type suggestion if applicable
+    secondary_tags: List[str] = Field(default_factory=list)  # Secondary classification tags
+
+
+class PromptType(str, Enum):
+    """Types of prompts stored in the database."""
+    CLASSIFIER = "classifier"
+    SUMMARIZER = "summarizer"
+
+
+class PromptRecord(BaseModel):
+    """Database record for a prompt."""
+    id: str
+    prompt_type: PromptType
+    document_type: Optional[str] = None  # NULL for classifier, specific for summarizers
+    prompt_text: str
+    version: int = 1
+    performance_score: Optional[float] = None
+    performance_metrics: Optional[Dict[str, Any]] = None
+    created_at: datetime
+    updated_at: datetime
+    is_active: bool = True
+    user_id: Optional[str] = None
+
+
+class ClassificationSuggestion(BaseModel):
+    """Suggestion for a new document type."""
+    id: str
+    suggested_type: str
+    document_id: Optional[str] = None
+    confidence: float
+    reasoning: str
+    approved: bool = False
+    reviewed_at: Optional[datetime] = None
+    created_at: datetime
+    user_id: Optional[str] = None
+
+
+class ScoringResult(BaseModel):
+    """Result from scoring a prompt's performance."""
+    score: float  # 0.0 to 1.0
+    feedback: str
+    suggested_improvements: str
+    metrics: Dict[str, Any] = Field(default_factory=dict)
 
 
 class EventType(str, Enum):

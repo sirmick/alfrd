@@ -66,21 +66,27 @@ data/inbox/
     └── page2.jpg          # Page 2
 ```
 
-### Processing Pipeline
+### Self-Improving Processing Pipeline
 
 ```
-User adds document → Folder created in inbox
+User adds document → Folder created in inbox (PENDING)
                      ↓
-                 Processor scans inbox
+              OCRWorker → Textract OCR (OCR_COMPLETED)
                      ↓
-              AWS Textract OCR
+          ClassifierWorker → DB prompt classification (CLASSIFIED)
                      ↓
-           Extracts text + blocks
+      ClassifierScorerWorker → Scores & evolves prompt (SCORED_CLASSIFICATION)
                      ↓
-         Stores in DB + filesystem
+         SummarizerWorker → Type-specific summarization (SUMMARIZED)
                      ↓
-        Moves to processed folder
+      SummarizerScorerWorker → Scores & evolves prompt (COMPLETED)
 ```
+
+**Self-Improving Features:**
+- Classifier prompt (max 300 words) evolves based on classification accuracy
+- Summarizer prompts (per document type) evolve based on extraction quality
+- LLM can suggest new document types beyond initial set (bill, finance, junk, school, event)
+- System learns from mistakes and improves automatically
 
 ### LLM-Optimized Output
 
@@ -105,13 +111,18 @@ User adds document → Folder created in inbox
 
 ## Key Features
 
-### ✅ Phase 1B Complete - Worker Pool Architecture
+### ✅ Phase 1C Complete - Self-Improving Prompt Architecture
 
-- **Worker pool architecture** - State-machine-driven parallel processing
+- **🧠 Self-improving prompts** - Prompts evolve based on performance feedback
+- **🔄 Dynamic classification** - LLM can suggest new document types
+- **📊 Generic workflow** - No hardcoded handlers, all DB-driven
+- **🎯 Scorer workers** - Evaluate and improve classifier/summarizer prompts
+- **🏷️ Secondary tags** - Flexible classification (tax, university, utility, etc.)
+- **📝 Prompt versioning** - All prompt changes tracked with version history
+- **Worker pool architecture** - State-machine-driven parallel processing (5 workers)
 - **OCRWorker** - AWS Textract OCR with 95%+ accuracy
-- **ClassifierWorker** - MCP document classification via AWS Bedrock
-- **WorkflowWorker** - Type-specific handlers (Bill, Finance, Junk)
-- **Bill summarization** - Automatic extraction of vendor, amount, due date, line items
+- **ClassifierWorker** - DB-driven classification with new type suggestions
+- **SummarizerWorker** - Type-specific DB-driven summarization
 - **Folder-based document input** with `meta.json` metadata
 - **Block-level data preservation** (PAGE, LINE, WORD with bounding boxes)
 - **Multi-document folders** (process multiple images as single document)
@@ -307,6 +318,18 @@ No wrapper scripts or environment setup needed!
 - [x] BedrockClient for AWS Bedrock API
 - [x] Main orchestrator running all workers
 
+### Phase 1C: Self-Improving Prompts ✅
+- [x] Prompts table for classifier and summarizers
+- [x] Classification suggestions table
+- [x] Document types table (dynamic)
+- [x] ClassifierScorerWorker with prompt evolution
+- [x] SummarizerScorerWorker with prompt evolution
+- [x] Generic SummarizerWorker (replaces hardcoded handlers)
+- [x] Dynamic classification with new type suggestions
+- [x] Secondary tags for flexible classification
+- [x] Prompt versioning and performance tracking
+- [x] Default prompts initialization
+
 ### Phase 2: PWA Interface (Next)
 - [ ] Ionic PWA with camera capture
 - [ ] Image upload API endpoint
@@ -340,6 +363,9 @@ No wrapper scripts or environment setup needed!
 
 Key tables:
 - `documents` - Core document metadata and extracted text
+- `prompts` - Evolving classifier and summarizer prompts (versioned)
+- `classification_suggestions` - LLM-suggested new document types
+- `document_types` - Dynamic list of known document types
 - `summaries` - Generated summaries by period
 - `processing_events` - Event log for pipeline
 - `analytics` - Pre-computed metrics
@@ -348,12 +374,14 @@ See `api-server/src/api_server/db/schema.sql` for complete schema.
 
 ## Statistics
 
-- **Lines of Code**: ~2,874 lines (core + workers + MCP tools)
+- **Lines of Code**: ~4,800+ lines (core + workers + scorers + MCP tools)
 - **Test Coverage**: 11/11 tests passing (storage + worker infrastructure)
 - **OCR Accuracy**: 95%+ with AWS Textract
 - **Processing Speed**: ~2-3 seconds per page
-- **Worker Architecture**: 3 workers (OCR, Classifier, Workflow)
+- **Worker Architecture**: 5 workers (OCR, Classifier, ClassifierScorer, Summarizer, SummarizerScorer)
 - **MCP Integration**: Bedrock with Claude Sonnet 4 + Amazon Nova
+- **Prompt Evolution**: Automatic improvement based on performance feedback
+- **Document Types**: 5 default types + unlimited LLM-suggested types
 
 ## Contributing
 

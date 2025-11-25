@@ -4,12 +4,32 @@
 # Get project root (scripts folder parent)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+ORIGINAL_PWD="$(pwd)"
 
 # Activate venv if it exists
 if [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
     source "$PROJECT_ROOT/venv/bin/activate"
 fi
 
-# Run the CLI tool
+# Convert relative paths to absolute before changing directory
+ARGS=()
+for arg in "$@"; do
+    # If it's a file path (not starting with --) and not already absolute
+    if [[ ! "$arg" =~ ^-- ]] && [[ ! "$arg" =~ ^/ ]]; then
+        # Try to resolve as a file path
+        if [ -e "$ORIGINAL_PWD/$arg" ]; then
+            # Convert to absolute path
+            ARGS+=("$(cd "$ORIGINAL_PWD" && realpath "$arg")")
+        else
+            # Keep argument as-is (might be a non-file argument)
+            ARGS+=("$arg")
+        fi
+    else
+        # Keep flags and absolute paths as-is
+        ARGS+=("$arg")
+    fi
+done
+
+# Run the CLI tool from project root with resolved paths
 cd "$PROJECT_ROOT"
-python3 document-processor/src/document_processor/cli/add-document.py "$@"
+python3 document-processor/src/document_processor/cli/add-document.py "${ARGS[@]}"

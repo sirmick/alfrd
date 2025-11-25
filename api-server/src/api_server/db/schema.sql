@@ -10,20 +10,26 @@ CREATE TABLE IF NOT EXISTS documents (
     
     -- Processing status - detailed pipeline tracking
     status VARCHAR NOT NULL CHECK (status IN (
-        'pending',           -- Document folder detected
-        'ocr_started',       -- AWS Textract called
-        'ocr_completed',     -- Text extracted
-        'classifying',       -- MCP classification in progress
-        'classified',        -- Type determined
-        'processing',        -- Type-specific handler processing
-        'completed',         -- All processing done
-        'failed'            -- Error at any stage
+        'pending',                  -- Document folder detected
+        'ocr_started',             -- AWS Textract called
+        'ocr_completed',           -- Text extracted
+        'classifying',             -- MCP classification in progress
+        'classified',              -- Type determined
+        'scoring_classification',  -- Scoring classifier performance
+        'scored_classification',   -- Classifier scored and prompt updated
+        'summarizing',             -- Generating summary
+        'summarized',              -- Summary generated
+        'scoring_summary',         -- Scoring summarizer performance
+        'completed',               -- All processing done
+        'failed'                   -- Error at any stage
     )),
     processed_at TIMESTAMP,
     error_message VARCHAR,
     
     -- Classification (new simplified system)
-    document_type VARCHAR CHECK (document_type IN ('junk', 'bill', 'finance')),
+    document_type VARCHAR,  -- Dynamic types: 'junk', 'bill', 'finance', 'school', 'event', etc.
+    suggested_type VARCHAR,  -- LLM-suggested new type (if different from existing)
+    secondary_tags JSON,     -- Array of secondary classification tags
     classification_confidence FLOAT,
     classification_reasoning TEXT,
     
@@ -138,3 +144,52 @@ CREATE INDEX IF NOT EXISTS idx_events_document ON processing_events(document_id)
 
 CREATE INDEX IF NOT EXISTS idx_analytics_metric ON analytics(metric_name, period DESC);
 CREATE INDEX IF NOT EXISTS idx_analytics_user ON analytics(user_id, period DESC);
+
+-- Prompts table - store evolving classifier and summarizer prompts
+CREATE TABLE IF NOT EXISTS prompts (
+    id VARCHAR PRIMARY KEY,
+    prompt_type VARCHAR NOT NULL CHECK (prompt_type IN ('classifier', 'summarizer')),
+    document_type VARCHAR,  -- NULL for classifier, specific type for summarizers
+    prompt_text TEXT NOT NULL,
+    version INTEGER DEFAULT 1,
+    performance_score FLOAT,
+    performance_metrics JSON,  -- Detailed scoring metrics
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT true,
+    user_id VARCHAR,
+    
+    UNIQUE(prompt_type, document_type, version, user_id)
+);
+
+-- Track classification suggestions from LLM
+CREATE TABLE IF NOT EXISTS classification_suggestions (
+    id VARCHAR PRIMARY KEY,
+    suggested_type VARCHAR NOT NULL,
+    document_id VARCHAR,
+    confidence FLOAT,
+    reasoning TEXT,
+    approved BOOLEAN DEFAULT false,
+    reviewed_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    user_id VARCHAR,
+    
+    FOREIGN KEY (document_id) REFERENCES documents(id)
+);
+
+-- Track known document types (dynamic list)
+CREATE TABLE IF NOT EXISTS document_types (
+    id VARCHAR PRIMARY KEY,
+    type_name VARCHAR NOT NULL UNIQUE,
+    description TEXT,
+    is_active BOOLEAN DEFAULT true,
+    usage_count INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    user_id VARCHAR
+);
+
+-- Indexes for new tables
+CREATE INDEX IF NOT EXISTS idx_prompts_active ON prompts(prompt_type, document_type, is_active);
+CREATE INDEX IF NOT EXISTS idx_prompts_performance ON prompts(prompt_type, performance_score DESC);
+CREATE INDEX IF NOT EXISTS idx_classification_suggestions_approved ON classification_suggestions(approved, created_at);
+CREATE INDEX IF NOT EXISTS idx_document_types_active ON document_types(is_active, usage_count DESC);

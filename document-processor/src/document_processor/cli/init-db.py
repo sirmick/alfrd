@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Initialize DuckDB database with schema."""
+"""Initialize DuckDB database with schema and generic prompts.
+
+This script CLEARS ALL EXISTING DATA and creates a fresh database.
+"""
 
 import sys
+import shutil
 from pathlib import Path
+from uuid import uuid4
+from datetime import datetime
 
 # Add project root to path (go up to esec/)
 _script_dir = Path(__file__).resolve()
@@ -11,22 +17,44 @@ sys.path.insert(0, str(_project_root))
 
 import duckdb
 from shared.config import Settings
+from shared.types import PromptType
 
 
 def init_database():
-    """Initialize the database with the schema."""
+    """Initialize the database with the schema and default prompts.
+    
+    WARNING: This deletes all existing data!
+    """
     settings = Settings()
     db_path = settings.database_path
+    data_dir = settings.database_path.parent
     
-    # Ensure parent directory exists
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"⚠️  WARNING: This will DELETE all existing data in {data_dir}")
+    print()
     
-    print(f"Initializing database at {db_path}")
+    # Clear everything in data directory
+    if data_dir.exists():
+        print(f"🗑️  Clearing data directory: {data_dir}")
+        for item in data_dir.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item)
+                print(f"   Deleted directory: {item.name}")
+            else:
+                item.unlink()
+                print(f"   Deleted file: {item.name}")
+    
+    # Recreate data directory structure
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "inbox").mkdir(exist_ok=True)
+    (data_dir / "documents").mkdir(exist_ok=True)
+    print()
+    
+    print(f"Initializing fresh database at {db_path}")
     
     # Create database connection
     conn = duckdb.connect(str(db_path))
     
-    # Read schema file - now relative to project root
+    # Read schema file
     schema_path = _project_root / "api-server" / "src" / "api_server" / "db" / "schema.sql"
     
     if not schema_path.exists():
@@ -43,15 +71,176 @@ def init_database():
         for statement in statements:
             conn.execute(statement)
         
+        print(f"✓ Database schema created successfully")
+        print(f"  Tables: documents, summaries, processing_events, analytics, prompts, classification_suggestions, document_types")
+        
+        # Initialize default prompts
+        print("\nInitializing default prompts...")
+        _init_default_prompts(conn)
+        
+        # Initialize default document types
+        print("\nInitializing default document types...")
+        _init_default_document_types(conn)
+        
         conn.close()
-        print(f"✓ Database initialized successfully at {db_path}")
-        print(f"  Tables created: documents, summaries, processing_events, analytics")
+        print(f"\n✓ Database initialized successfully at {db_path}")
         return 0
         
     except Exception as e:
         print(f"ERROR: Failed to initialize database: {e}")
+        import traceback
+        traceback.print_exc()
         conn.close()
         return 1
+
+
+def _init_default_prompts(conn):
+    """Initialize default classifier and summarizer prompts."""
+    now = datetime.utcnow()
+    
+    # Default classifier prompt (under 300 words)
+    classifier_prompt = """You are a document classifier. Analyze the document and classify it into one of the known types.
+
+Known document types will be provided. You may also suggest a NEW type if none of the existing types fit well.
+
+For each document:
+1. Choose the most appropriate type from the known types, OR suggest a new type
+2. Provide a confidence score (0.0 to 1.0)
+3. Give clear reasoning for your classification
+4. Optionally add secondary tags (e.g., "tax", "university", "utility", "insurance")
+
+Guidelines:
+- Be specific and accurate
+- Use high confidence (>0.8) only when very certain
+- Suggest new types sparingly - only when document clearly doesn't fit existing categories
+- Secondary tags help with organization and search
+
+Return JSON format:
+{
+    "document_type": "chosen_type_from_list",
+    "confidence": 0.95,
+    "reasoning": "why this classification is correct",
+    "suggested_type": "new_type_name",  // OPTIONAL: only if suggesting new type
+    "suggestion_reasoning": "why new type is needed",  // OPTIONAL
+    "secondary_tags": ["tag1", "tag2"]  // OPTIONAL: additional classification tags
+}"""
+    
+    classifier_id = str(uuid4())
+    conn.execute("""
+        INSERT INTO prompts
+        (id, prompt_type, document_type, prompt_text, version, is_active, created_at, updated_at)
+        VALUES (?, ?, NULL, ?, 1, true, ?, ?)
+    """, [classifier_id, PromptType.CLASSIFIER.value, classifier_prompt, now, now])
+    print(f"  ✓ Classifier prompt (v1, {len(classifier_prompt.split())} words)")
+    
+    # Default summarizer prompts for each document type
+    summarizer_prompts = {
+        "bill": """Extract structured data from this bill document.
+
+Focus on:
+- Vendor/company name
+- Total amount due
+- Due date
+- Issue/statement date
+- Account number
+- Service period
+- Line items (if applicable)
+- Payment instructions
+
+Return JSON with all available fields.""",
+        
+        "finance": """Extract structured financial data from this document.
+
+Focus on:
+- Institution name
+- Account number
+- Statement period
+- Beginning/ending balance
+- Transactions (summary)
+- Interest earned
+- Fees charged
+- Account type
+
+Return JSON with all available fields.""",
+        
+        "school": """Extract structured data from this school document.
+
+Focus on:
+- School/institution name
+- Student name
+- Document type (report card, transcript, permission slip, etc.)
+- Date/academic period
+- Grades or key information
+- Important deadlines
+- Contact information
+
+Return JSON with all available fields.""",
+        
+        "event": """Extract structured data from this event document.
+
+Focus on:
+- Event name
+- Date and time
+- Location/venue
+- Organizer
+- Cost/tickets
+- Registration deadline
+- Contact information
+- Important notes
+
+Return JSON with all available fields.""",
+        
+        "junk": """This is promotional or low-value content.
+
+Extract only:
+- Sender/company
+- Type of promotion
+- Any expiration dates
+
+Return minimal JSON.""",
+        
+        "generic": """Extract key information from this document.
+
+Identify and extract:
+- Document type/purpose
+- Main parties involved
+- Important dates
+- Key amounts or values
+- Critical information
+
+Return JSON with all relevant fields."""
+    }
+    
+    for doc_type, prompt_text in summarizer_prompts.items():
+        summarizer_id = str(uuid4())
+        conn.execute("""
+            INSERT INTO prompts
+            (id, prompt_type, document_type, prompt_text, version, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 1, true, ?, ?)
+        """, [summarizer_id, PromptType.SUMMARIZER.value, doc_type, prompt_text, now, now])
+        print(f"  ✓ Summarizer prompt for '{doc_type}' (v1)")
+
+
+def _init_default_document_types(conn):
+    """Initialize default known document types."""
+    now = datetime.utcnow()
+    
+    default_types = [
+        ("bill", "Utility bills, service invoices, recurring charges"),
+        ("finance", "Bank statements, investment documents, tax forms"),
+        ("junk", "Advertisements, promotional materials, spam"),
+        ("school", "Report cards, transcripts, school notices"),
+        ("event", "Invitations, tickets, event information"),
+    ]
+    
+    for type_name, description in default_types:
+        type_id = str(uuid4())
+        conn.execute("""
+            INSERT INTO document_types
+            (id, type_name, description, is_active, usage_count, created_at)
+            VALUES (?, ?, ?, true, 0, ?)
+        """, [type_id, type_name, description, now])
+        print(f"  ✓ Document type: {type_name}")
 
 
 if __name__ == "__main__":

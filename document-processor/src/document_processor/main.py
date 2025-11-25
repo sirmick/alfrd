@@ -1,5 +1,6 @@
-"""Main document processing loop using worker pool architecture."""
+"""Main document processing loop using self-improving worker pool architecture."""
 
+import argparse
 import asyncio
 from pathlib import Path
 import sys
@@ -14,7 +15,8 @@ from shared.config import Settings
 from document_processor.workers import WorkerPool
 from document_processor.ocr_worker import OCRWorker
 from document_processor.classifier_worker import ClassifierWorker
-from document_processor.workflow_worker import WorkflowWorker
+from document_processor.scorer_workers import ClassifierScorerWorker, SummarizerScorerWorker
+from document_processor.summarizer_worker import SummarizerWorker
 
 # Set up logging
 logging.basicConfig(
@@ -90,13 +92,19 @@ async def scan_inbox_and_create_pending_documents(settings: Settings):
             logger.error(f"Error registering folder {folder_path.name}: {e}", exc_info=True)
 
 
-async def main():
-    """Main entry point for worker-based document processing."""
+async def main(run_once: bool = False):
+    """Main entry point for self-improving document processing pipeline.
+    
+    Args:
+        run_once: If True, exit after processing all documents (no continuous polling)
+    """
     print("\n" + "=" * 80)
-    print("🚀 Document Processor - Worker Pool Mode")
+    print("🚀 Document Processor - Self-Improving Worker Pool Mode")
+    if run_once:
+        print("   Mode: Run once and exit")
     print("=" * 80)
     
-    logger.info("Starting document processor with worker pool")
+    logger.info(f"Starting document processor with self-improving worker pool (run_once={run_once})")
     
     settings = Settings()
     
@@ -107,7 +115,14 @@ async def main():
     print(f"⚙️  Worker Configuration:")
     print(f"   OCR Workers: {settings.ocr_workers} (poll every {settings.ocr_poll_interval}s)")
     print(f"   Classifier Workers: {settings.classifier_workers} (poll every {settings.classifier_poll_interval}s)")
-    print(f"   Workflow Workers: {settings.workflow_workers} (poll every {settings.workflow_poll_interval}s)")
+    print(f"   Classifier Scorer Workers: {settings.classifier_scorer_workers} (poll every {settings.classifier_scorer_poll_interval}s)")
+    print(f"   Summarizer Workers: {settings.summarizer_workers} (poll every {settings.summarizer_poll_interval}s)")
+    print(f"   Summarizer Scorer Workers: {settings.summarizer_scorer_workers} (poll every {settings.summarizer_scorer_poll_interval}s)")
+    print()
+    print(f"🧠 Prompt Evolution:")
+    print(f"   Classifier Max Words: {settings.classifier_prompt_max_words}")
+    print(f"   Min Docs for Scoring: {settings.min_documents_for_scoring}")
+    print(f"   Update Threshold: {settings.prompt_update_threshold}")
     print()
     
     logger.info(f"Inbox: {settings.inbox_path}")
@@ -119,25 +134,42 @@ async def main():
     await scan_inbox_and_create_pending_documents(settings)
     print()
     
-    # Step 2: Create worker pool
-    print("🔧 Starting worker pool...")
+    # Step 2: Create worker pool with new self-improving pipeline
+    print("🔧 Starting self-improving worker pool...")
     pool = WorkerPool()
     
-    # Add workers
+    # Add workers in pipeline order:
+    # 1. OCR - Extract text from documents
     pool.add_worker(OCRWorker(settings))
+    
+    # 2. Classifier - Classify documents using DB prompts (can suggest new types)
     pool.add_worker(ClassifierWorker(settings))
-    pool.add_worker(WorkflowWorker(settings))
+    
+    # 3. Classifier Scorer - Score classification and evolve prompt
+    pool.add_worker(ClassifierScorerWorker(settings))
+    
+    # 4. Summarizer - Generic summarization using type-specific DB prompts
+    pool.add_worker(SummarizerWorker(settings))
+    
+    # 5. Summarizer Scorer - Score summary and evolve prompt
+    pool.add_worker(SummarizerScorerWorker(settings))
     
     print()
     print("=" * 80)
-    print("✅ Workers started! Press Ctrl+C to stop.")
+    print("✅ Self-improving worker pipeline started!")
+    print("   Pipeline: OCR → Classify → Score → Summarize → Score → Complete")
+    print("   Prompts evolve automatically based on performance feedback")
+    print("   Press Ctrl+C to stop.")
     print("=" * 80)
     print()
-    logger.info("Worker pool started")
+    logger.info("Self-improving worker pool started with 5 workers")
     
     # Run worker pool
     try:
-        await pool.start()
+        if run_once:
+            await pool.start_once()
+        else:
+            await pool.start()
     except KeyboardInterrupt:
         print("\n⏹️  Shutting down workers...")
         logger.info("Received shutdown signal")
@@ -147,4 +179,12 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="ALFRD Document Processor")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Process all pending documents and exit (don't run continuously)"
+    )
+    args = parser.parse_args()
+    
+    asyncio.run(main(run_once=args.once))

@@ -1,10 +1,26 @@
 # ALFRD - Development Progress
 
-**Last Updated:** 2024-11-25
+**Last Updated:** 2024-11-25 (Pipeline Tested & Validated)
 
-## Current Phase: Phase 1B Complete - MCP Integration ✅
+## Current Phase: Phase 1C Complete - Self-Improving Prompts ✅
 
-### Worker Pool Architecture - COMPLETED
+### Pipeline Testing & Validation - COMPLETED
+
+**Test Results from `./samples/test-pipeline.sh`:**
+- ✅ OCR Worker: 98.47% confidence with AWS Textract
+- ✅ Classification: 95% confidence as "bill" document type
+- ✅ Prompt Evolution: Classifier v1→v2 (score: 0.85), Bill Summarizer v1→v2 (score: 0.85)
+- ✅ Complete pipeline: pending → ocr_completed → classified → scored_classification → summarized → completed
+
+**Issues Found and Fixed:**
+1. **Minimum scoring threshold** - Changed `min_documents_for_scoring` from 5 to 1 in [`shared/config.py`](shared/config.py:62)
+2. **SummarizerScorerWorker direct LLM calls** - Refactored to use MCP tools exclusively (architecture violation fixed)
+
+**New Tools Created:**
+- [`scripts/view-prompts`](scripts/view-prompts) - View prompt evolution history
+- [`document-processor/src/document_processor/cli/view-prompts.py`](document-processor/src/document_processor/cli/view-prompts.py) - CLI implementation
+
+### Self-Improving Prompt Architecture - COMPLETED
 
 **Commits:**
 - `f66f19d` - Folder-based processing with AWS Textract OCR ✅
@@ -75,21 +91,31 @@ data/inbox/
     └── page2.jpg              # Multi-page support
 ```
 
-### Processing Pipeline
+### Self-Improving Processing Pipeline
 
 ```
 1. User adds document → scripts/add-document.py
    ↓
-2. Document folder created in data/inbox/
+2. Document folder created in data/inbox/ (PENDING)
    ↓
-3. Processor scans inbox → document-processor/main.py
+3. OCRWorker → AWS Textract OCR (OCR_COMPLETED)
    ↓
-4. AWS Textract OCR → Extracts text + blocks
+4. ClassifierWorker → DB prompt + suggest types (CLASSIFIED)
    ↓
-5. Storage → Saves to DB + filesystem
+5. ClassifierScorerWorker → Score & evolve prompt (SCORED_CLASSIFICATION)
    ↓
-6. Folder moved to data/processed/
+6. SummarizerWorker → Type-specific DB prompt (SUMMARIZED)
+   ↓
+7. SummarizerScorerWorker → Score & evolve prompt (COMPLETED)
 ```
+
+**Self-Improving Features:**
+- Prompts stored in DB and versioned
+- Classifier prompt evolves based on accuracy (max 300 words)
+- Summarizer prompts (per type) evolve based on extraction quality
+- LLM can suggest new document types
+- Secondary tags for flexible organization
+- Performance metrics tracked for each prompt version
 
 ### Output Structure
 
@@ -132,6 +158,19 @@ data/documents/2024/11/
 3. **WorkflowWorker** - Type-specific handlers (bill/finance/junk) ✅
 4. **MCP Tools** - classify_document + summarize_bill ✅
 5. **Main Orchestrator** - All three workers running in parallel ✅
+
+### ✅ Phase 1C Complete - Self-Improving Prompts
+
+1. **Database Schema** - Added prompts, classification_suggestions, document_types tables ✅
+2. **Dynamic Classification** - LLM can suggest new document types beyond defaults ✅
+3. **Secondary Tags** - Flexible classification tags (tax, university, utility, etc.) ✅
+4. **ClassifierWorker** - Now uses DB-stored prompts, accepts type suggestions ✅
+5. **ClassifierScorerWorker** - Scores classification and evolves prompt (300 word max) ✅
+6. **SummarizerWorker** - Generic DB-driven summarizer (replaces hardcoded handlers) ✅
+7. **SummarizerScorerWorker** - Scores summaries and evolves type-specific prompts ✅
+8. **Prompt Evolution** - Automatic prompt improvement based on performance ✅
+9. **5-Worker Pipeline** - OCR → Classify → Score → Summarize → Score → Complete ✅
+10. **Default Prompts** - Initialized for classifier + 6 summarizer types ✅
 
 ### ❌ Not Yet Implemented
 
@@ -181,15 +220,18 @@ python samples/test_ocr.py samples/pg\&e-bill.jpg
 
 ## Statistics
 
-**Lines of Code (Phase 1A + 1B Complete):**
+**Lines of Code (Phase 1A + 1B + 1C Complete + Testing):**
 - Document Processor Core: ~800 lines (main.py, storage.py, detector.py, extractors)
 - Worker Infrastructure: ~418 lines (workers.py, ocr_worker.py)
-- Classifier Worker: ~228 lines (classifier_worker.py)
-- Workflow Worker: ~328 lines (workflow_worker.py with BillHandler, FinanceHandler, JunkHandler)
-- MCP Server: ~270 lines (bedrock.py, classify_document.py, summarize_bill.py)
+- Classifier Worker: ~280 lines (classifier_worker.py - DB-driven)
+- Scorer Workers: ~675 lines (scorer_workers.py - Refactored to use MCP tools)
+- Summarizer Worker: ~302 lines (summarizer_worker.py - NEW)
+- Workflow Worker: ~50 lines (workflow_worker.py - DEPRECATED)
+- MCP Server: ~400 lines (bedrock.py, classify_dynamic.py, score_performance.py, summarize_dynamic.py)
 - Tests: ~480 lines (test_storage.py, test_workers.py)
-- Helper Scripts: ~350 lines (add-document.py, test_ocr.py, view-document.py)
-- **Total New/Modified: ~2,874 lines**
+- Helper Scripts: ~750 lines (add-document.py, init-db.py, view-document.py, view-prompts.py)
+- Database Schema: ~190 lines (schema.sql with new tables)
+- **Total New/Modified: ~5,000+ lines**
 
 **Test Coverage:**
 - Storage module: 100% (5/5 tests passing)
@@ -199,18 +241,26 @@ python samples/test_ocr.py samples/pg\&e-bill.jpg
 
 ## Next Steps
 
-### Immediate (Phase 2 - PWA Interface)
-1. ⏳ Create basic Ionic PWA with camera capture
-2. ⏳ Add `/api/v1/documents/upload-image` endpoint to FastAPI
-3. ⏳ Wire up image upload from PWA to API
-4. ⏳ Test end-to-end: photo → upload → process → classify → summarize
+### Immediate (Phase 2 - Testing & Validation)
+1. ✅ Test self-improving workflow with sample documents - COMPLETED
+2. ✅ Verify prompt evolution works correctly - COMPLETED (v1→v2 observed)
+3. ⏳ Test classification type suggestions - Need to test with diverse documents
+4. ✅ Validate scoring feedback loop - COMPLETED (scores being generated)
+5. ✅ Document prompt evolution behavior - COMPLETED (MCP architecture notes added)
+6. ⏳ Process multiple documents to observe continued evolution
 
-### Short Term (Phase 2 - Enhanced Features)
-1. Add FinanceHandler implementation (account statements, investments)
-2. Add comprehensive integration tests for full pipeline
-3. Implement hierarchical summaries (weekly → monthly → yearly)
-4. Add financial tracking with CSV exports
-5. Implement real-time file watching (watchdog)
+### Short Term (Phase 2 - PWA Interface)
+1. Create basic Ionic PWA with camera capture
+2. Add `/api/v1/documents/upload-image` endpoint to FastAPI
+3. Wire up image upload from PWA to API
+4. Test end-to-end: photo → upload → process → classify → summarize
+
+### Medium Term (Phase 3 - Enhanced Features)
+1. Add comprehensive integration tests for full pipeline
+2. Implement hierarchical summaries (weekly → monthly → yearly)
+3. Add financial tracking with CSV exports
+4. Implement real-time file watching (watchdog)
+5. Add analytics dashboard for prompt performance
 
 ### Medium Term (Phase 3)
 1. Hierarchical summaries (weekly/monthly/yearly)
@@ -219,12 +269,13 @@ python samples/test_ocr.py samples/pg\&e-bill.jpg
 4. Real-time file watching (watchdog)
 5. Analytics dashboard
 
-## Known Issues
+## Known Issues & Notes
 
-1. **Database must be initialized** - Users must run `python3 scripts/init-db.py` before first use
-2. **API server not listening** - Event emission works but API doesn't process events yet
-3. **MCP not integrated** - Classification exists but not called by processor
-4. **Watcher mode stub** - Only batch mode works currently
+1. **Database must be initialized** - Users must run `./scripts/init-db` before first use (DELETES ALL DATA)
+2. **API server not fully functional** - Basic endpoints only, event processing not implemented
+3. **Watcher mode stub** - Only batch mode with `--once` flag works currently
+4. **Minimum scoring threshold** - Set to 1 for testing; production should use 5+
+5. **MCP Architecture Rule** - Document processors must ONLY call MCP tools, never LLM directly
 
 ## Technical Decisions
 
@@ -255,33 +306,47 @@ python samples/test_ocr.py samples/pg\&e-bill.jpg
 - **Comprehensive logging** - Easy debugging with timestamps
 - **Worker pool architecture** - State-machine-driven parallel document processing
 - **MCP tools as libraries** - Imported directly by workers, not separate server process
+- **⚠️ MCP Architecture Rule** - Workers must ONLY call MCP tools, never BedrockClient directly
+  - This ensures consistent prompt management, versioning, and observability
+  - Makes future transition to standalone MCP server seamless
+  - Example: Use [`score_summarization()`](mcp-server/src/mcp_server/tools/score_performance.py) not `bedrock_client.invoke_model()`
 
-## Phase 1B Implementation Details
+## Phase 1C Implementation Details
 
-### Worker Pool Architecture
+### Self-Improving Worker Pipeline
 
-**Three-Worker Pipeline:**
-1. **OCRWorker** - Polls for `pending` documents, runs AWS Textract OCR, transitions to `ocr_completed`
-2. **ClassifierWorker** - Polls for `ocr_completed` documents, calls MCP classify_document, transitions to `classified`
-3. **WorkflowWorker** - Polls for `classified` documents, routes to type-specific handlers, transitions to `completed`
+**Five-Worker Pipeline:**
+1. **OCRWorker** - Polls for `pending`, runs AWS Textract OCR → `ocr_completed`
+2. **ClassifierWorker** - Polls for `ocr_completed`, uses DB prompt, suggests types → `classified`
+3. **ClassifierScorerWorker** - Polls for `classified`, scores & evolves prompt → `scored_classification`
+4. **SummarizerWorker** - Polls for `scored_classification`, type-specific summarization → `summarized`
+5. **SummarizerScorerWorker** - Polls for `summarized`, scores & evolves prompt → `completed`
 
-**Type-Specific Handlers:**
-- **BillHandler** - Loads full LLM JSON with blocks, calls MCP summarize_bill, extracts vendor/amount/due_date
-- **FinanceHandler** - Placeholder for future account statement processing
-- **JunkHandler** - Minimal processing, just marks complete
+**Prompt Evolution System:**
+- **Classifier Prompt**: Single prompt (max 300 words), evolves based on classification accuracy
+- **Summarizer Prompts**: One per document type (bill, finance, school, event, junk, generic)
+- **Scoring**: LLM evaluates its own performance, suggests improvements
+- **Versioning**: All prompts tracked with version numbers and performance scores
+- **Thresholds**: Min 5 documents before scoring, 0.05 score improvement to update
+
+**Dynamic Classification:**
+- LLM can suggest NEW document types not in initial list
+- Suggestions recorded in `classification_suggestions` table
+- Secondary tags for flexible organization (tax, university, utility, etc.)
+- Document types managed in `document_types` table
 
 **MCP Integration:**
-- MCP tools are library functions imported directly by workers
-- No separate MCP server process needed for workers
-- BedrockClient handles AWS Bedrock API calls (Claude Sonnet 4 + Amazon Nova)
-- Enhanced prompts include full Textract block structure for spatial reasoning
+- MCP tools used as library functions (no separate server)
+- BedrockClient handles AWS Bedrock API (Claude Sonnet 4 + Amazon Nova)
+- Full Textract blocks sent to LLM for spatial reasoning
 
 **Key Design Decisions:**
-- Full LLM JSON with blocks sent to Bedrock for better extraction accuracy
-- Structured data stored in generic `structured_data` JSON field
-- Workers poll database at configurable intervals (5s OCR, 3s classifier, 3s workflow)
-- State transitions tracked in DB for observability and recovery
+- NO hardcoded handlers - all prompt-driven
+- Prompts improve automatically based on feedback
+- System learns from mistakes and adapts
+- Generic architecture works for any document type
+- Workers poll at 3-5s intervals (configurable)
 
 ---
 
-**Status:** Phase 1B complete! Worker pool with MCP integration fully functional. Next: PWA interface for mobile photo capture.
+**Status:** Phase 1C complete! Self-improving prompt architecture fully functional. System learns from feedback and evolves prompts automatically. Next: Testing and validation, then PWA interface for mobile photo capture.

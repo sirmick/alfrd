@@ -2,6 +2,10 @@
 
 **Automated Ledger & Filing Research Database**
 
+> **Current Status:** Phase 1C Complete - Self-Improving MCP-Based Pipeline ✅
+>
+> 5-worker pipeline with dynamic prompts that evolve based on performance feedback.
+
 ## Initial Setup
 
 ### 1. Prerequisites
@@ -304,30 +308,58 @@ pip install -e ./api-server
 pip install -e ./mcp-server
 ```
 
+## Available Commands
+
+### Core Commands
+
+```bash
+# Initialize database (required once, DELETES ALL DATA!)
+./scripts/init-db
+
+# Add a document
+./scripts/add-document <path-to-file> [--tags tag1 tag2] [--source mobile]
+
+# Process documents
+./scripts/start-processor           # Continuous mode
+./scripts/start-processor --once    # Process once and exit
+
+# View documents
+./scripts/view-document <doc-id>    # Show specific document
+./scripts/view-document --list      # List recent documents
+./scripts/view-document --stats     # Show statistics
+
+# View prompt evolution
+./scripts/view-prompts                    # All prompts with history
+./scripts/view-prompts --type classifier  # Only classifier prompts
+./scripts/view-prompts --type summarizer  # Only summarizer prompts
+./scripts/view-prompts --archived         # Include archived versions
+
+# Test pipeline
+./samples/test-pipeline.sh          # Complete end-to-end test
+```
+
+### Development Commands
+
+```bash
+# Run tests
+pytest document-processor/tests/ -v
+
+# Test OCR extraction
+python samples/test_ocr.py samples/pg\&e-bill.jpg
+
+# Start API server (not fully functional yet)
+./scripts/start-api
+
+# Start MCP server (stub only)
+./scripts/start-mcp
+```
+
 ## Next Steps
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for detailed system design.
 See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for development roadmap.
 See [`PROGRESS.md`](PROGRESS.md) for current status.
-
-## Development Commands
-
-```bash
-# Initialize database (required once)
-python3 scripts/init-db.py
-
-# Add a document
-python scripts/add-document.py image.jpg --tags bill
-
-# Process documents
-python3 document-processor/src/document_processor/main.py
-
-# Run tests
-pytest document-processor/tests/ -v
-
-# Test OCR
-python samples/test_ocr.py samples/pg\&e-bill.jpg
-```
+See [`CONTINUE_HERE.md`](CONTINUE_HERE.md) for latest development status.
 
 ---
 

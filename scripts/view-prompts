@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start ALFRD Document Processor (Worker Pool)
+# View prompt evolution history
 
 # Get project root (scripts folder parent)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -10,6 +10,6 @@ if [ -f "$PROJECT_ROOT/venv/bin/activate" ]; then
     source "$PROJECT_ROOT/venv/bin/activate"
 fi
 
-# Run document processor
+# Run the CLI tool
 cd "$PROJECT_ROOT"
-python3 document-processor/src/document_processor/main.py "$@"
+python3 document-processor/src/document_processor/cli/view-prompts.py "$@"
