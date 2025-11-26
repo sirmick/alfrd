@@ -1,32 +1,43 @@
 version: '3.8'
 
 services:
-  esec:
+  alfrd:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: esec-dev
+    container_name: alfrd-dev
     ports:
       - "8000:8000"  # API Server
-      - "8080:8080"  # Web UI
-      - "3000:3000"  # MCP Server
+      - "5173:5173"  # Vite dev server (web UI)
     volumes:
       - ../data:/data
+      # Mount source code for development
       - ../document-processor:/app/document-processor
       - ../api-server:/app/api-server
       - ../mcp-server:/app/mcp-server
-      - ../web-ui:/app/web-ui
+      - ../web-ui/src:/app/web-ui/src
+      - ../web-ui/public:/app/web-ui/public
       - ../shared:/app/shared
+      - ../scripts:/app/scripts
     environment:
       - ENV=development
-      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - LOG_LEVEL=DEBUG
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
+      - DATABASE_PATH=/data/alfrd.db
+      - INBOX_PATH=/data/inbox
+      - DOCUMENTS_PATH=/data/documents
+      - SUMMARIES_PATH=/data/summaries
     restart: unless-stopped
+    sysctls:
+      - net.ipv4.ip_unprivileged_port_start=0
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 5s
+      start_period: 10s
+    stdin_open: true
+    tty: true
