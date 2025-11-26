@@ -24,7 +24,8 @@
     "ionicons": "^7.4.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-router-dom": "^6.28.0",
+    "react-router": "^5.3.4",
+    "react-router-dom": "^5.3.4",
     "vite": "^7.2.4"
   }
 }
