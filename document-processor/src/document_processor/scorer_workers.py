@@ -403,6 +403,9 @@ class SummarizerScorerWorker(BaseWorker):
             # Mark document as completed
             await self.update_status(doc_id, DocumentStatus.COMPLETED)
             
+            # Clean up inbox folder after successful processing
+            await self._cleanup_inbox_folder(doc_id)
+            
             logger.info(
                 f"Scoring complete for {doc_id}: "
                 f"score={scoring['score']:.2f}, "
@@ -516,5 +519,38 @@ class SummarizerScorerWorker(BaseWorker):
                 f"Evolved {document_type} summarizer prompt to version {new_version} "
                 f"(score: {score:.2f})"
             )
+        finally:
+            conn.close()
+    
+    async def _cleanup_inbox_folder(self, doc_id: str):
+        """Delete inbox folder after successful processing."""
+        import shutil
+        
+        conn = duckdb.connect(str(self.settings.database_path))
+        try:
+            # Get original inbox folder path
+            result = conn.execute(
+                "SELECT folder_path FROM documents WHERE id = ?",
+                [doc_id]
+            ).fetchone()
+            
+            if not result or not result[0]:
+                return
+            
+            folder_path = Path(result[0])
+            
+            # Only delete if it's in the inbox directory
+            try:
+                folder_path.relative_to(self.settings.inbox_path)
+                
+                if folder_path.exists():
+                    shutil.rmtree(folder_path)
+                    logger.info(f"Cleaned up inbox folder: {folder_path.name}")
+            except ValueError:
+                # Path is not in inbox, don't delete
+                logger.debug(f"Folder {folder_path} not in inbox, skipping cleanup")
+        except Exception as e:
+            # Don't fail the whole process if cleanup fails
+            logger.warning(f"Failed to cleanup inbox folder for {doc_id}: {e}")
         finally:
             conn.close()

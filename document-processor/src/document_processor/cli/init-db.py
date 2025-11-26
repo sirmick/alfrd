@@ -190,11 +190,23 @@ Focus on:
 
 Return JSON with all available fields.""",
         
-        "junk": """This is promotional or low-value content.
+        "advertising": """Extract structured data from this advertising/promotional document.
+
+Focus on:
+- Company/brand name
+- Promotional offers
+- Products/services featured
+- Validity/expiration dates
+- Contact information
+- Location/hours (if applicable)
+
+Return JSON with all available fields.""",
+        
+        "junk": """This is spam or unwanted promotional content.
 
 Extract only:
 - Sender/company
-- Type of promotion
+- Type of content
 - Any expiration dates
 
 Return minimal JSON.""",
@@ -228,7 +240,8 @@ def _init_default_document_types(conn):
     default_types = [
         ("bill", "Utility bills, service invoices, recurring charges"),
         ("finance", "Bank statements, investment documents, tax forms"),
-        ("junk", "Advertisements, promotional materials, spam"),
+        ("advertising", "Marketing materials with offers, promotions, and expiration dates"),
+        ("junk", "Spam, unwanted promotional materials"),
         ("school", "Report cards, transcripts, school notices"),
         ("event", "Invitations, tickets, event information"),
     ]

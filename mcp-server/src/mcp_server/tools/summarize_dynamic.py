@@ -60,9 +60,13 @@ def summarize_document_dynamic(
         prompt_parts.append("\n\n")
     
     prompt_parts.append(
-        "Extract structured data from this document. "
-        "Respond with JSON containing relevant fields for this document type. "
-        "Be specific and accurate."
+        "Extract structured data from this document AND provide a one-line summary. "
+        "Respond with JSON containing:\n"
+        "1. A 'summary' field: One concise sentence describing this document.\n"
+        "   - For bills: Include vendor, total amount due, and due date (e.g., 'City Light bill for $1,351.40 due Nov 02, 2020')\n"
+        "   - For other documents: Include key identifying information\n"
+        "2. Additional fields with relevant data for this document type\n"
+        "Be specific and accurate. ALWAYS include monetary amounts in summaries for bills."
     )
     
     user_message = "".join(prompt_parts)

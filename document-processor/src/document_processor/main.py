@@ -31,11 +31,13 @@ async def scan_inbox_and_create_pending_documents(settings: Settings):
     Scan inbox for new folders and create pending database entries.
     
     This allows workers to pick them up and process them.
+    Skips folders that are already registered in the database.
     """
     from document_processor.detector import FileDetector
     from document_processor.storage import DocumentStorage
     from shared.constants import META_JSON_FILENAME
     import json
+    import duckdb
     
     detector = FileDetector()
     storage = DocumentStorage(settings)
@@ -52,11 +54,19 @@ async def scan_inbox_and_create_pending_documents(settings: Settings):
     folders = [f for f in inbox.iterdir() if f.is_dir()]
     
     if not folders:
-        logger.info("No document folders found in inbox")
+        logger.debug("No document folders found in inbox")
         return
     
-    logger.info(f"Found {len(folders)} document folders to register")
+    # Get list of already registered document IDs
+    conn = duckdb.connect(str(settings.database_path))
+    try:
+        existing_ids = set(row[0] for row in conn.execute("SELECT id FROM documents").fetchall())
+    finally:
+        conn.close()
     
+    logger.info(f"Found {len(folders)} document folders in inbox, {len(existing_ids)} already registered")
+    
+    new_count = 0
     for folder_path in folders:
         try:
             # Validate folder
@@ -67,6 +77,11 @@ async def scan_inbox_and_create_pending_documents(settings: Settings):
                 continue
             
             doc_id = meta.get('id')
+            
+            # Skip if already registered
+            if doc_id in existing_ids:
+                logger.debug(f"Document {doc_id} already registered, skipping")
+                continue
             
             # Store document folder (creates DB entry with PENDING status)
             extracted_documents = []
@@ -86,10 +101,16 @@ async def scan_inbox_and_create_pending_documents(settings: Settings):
                 llm_formatted=llm_formatted
             )
             
-            logger.info(f"Registered document {doc_id} in PENDING status for worker processing")
+            logger.info(f"Registered new document {doc_id} in PENDING status for worker processing")
+            new_count += 1
             
         except Exception as e:
             logger.error(f"Error registering folder {folder_path.name}: {e}", exc_info=True)
+    
+    if new_count > 0:
+        logger.info(f"Registered {new_count} new document(s) for processing")
+    else:
+        logger.info("No new documents to register")
 
 
 async def main(run_once: bool = False):
@@ -164,12 +185,29 @@ async def main(run_once: bool = False):
     print()
     logger.info("Self-improving worker pool started with 5 workers")
     
-    # Run worker pool
+    # Run worker pool with periodic inbox scanning
     try:
         if run_once:
             await pool.start_once()
         else:
-            await pool.start()
+            # Start workers
+            worker_task = asyncio.create_task(pool.start())
+            
+            # Start periodic inbox scanner
+            async def periodic_inbox_scan():
+                """Periodically scan inbox for new documents."""
+                while True:
+                    await asyncio.sleep(10)  # Scan every 10 seconds
+                    try:
+                        logger.debug("Periodic inbox scan...")
+                        await scan_inbox_and_create_pending_documents(settings)
+                    except Exception as e:
+                        logger.error(f"Error in periodic inbox scan: {e}", exc_info=True)
+            
+            scanner_task = asyncio.create_task(periodic_inbox_scan())
+            
+            # Wait for either task (worker pool runs indefinitely)
+            await asyncio.gather(worker_task, scanner_task, return_exceptions=True)
     except KeyboardInterrupt:
         print("\n⏹️  Shutting down workers...")
         logger.info("Received shutdown signal")

@@ -136,24 +136,32 @@ class SummarizerWorker(BaseWorker):
                 self.bedrock_client
             )
             
-            # Update database with summary
+            # Extract one-line summary if present
+            summary_text = summary.get('summary', '')
+            
+            # Update database with both summary text and structured data
             conn = duckdb.connect(str(self.settings.database_path))
             try:
                 conn.execute("""
-                    UPDATE documents 
-                    SET structured_data = ?,
+                    UPDATE documents
+                    SET summary = ?,
+                        structured_data = ?,
                         updated_at = ?
                     WHERE id = ?
                 """, [
+                    summary_text,
                     json.dumps(summary),
                     datetime.utcnow(),
                     doc_id
                 ])
                 
+                # Log with full one-line summary
+                summary_preview = summary_text if len(summary_text) <= 100 else f"{summary_text[:97]}..."
                 logger.info(
                     f"Summarization complete for {doc_id}: "
                     f"{len(summary)} fields extracted"
                 )
+                logger.info(f"  Summary: {summary_preview}")
             finally:
                 conn.close()
             

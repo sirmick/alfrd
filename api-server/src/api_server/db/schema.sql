@@ -59,8 +59,9 @@ CREATE TABLE IF NOT EXISTS documents (
     -- Full-text search support
     extracted_text TEXT,
     
-    -- JSON for flexible data
-    structured_data JSON,
+    -- Summary and structured data
+    summary TEXT,                           -- One-line human-readable summary
+    structured_data JSON,                   -- Extracted fields as JSON
     tags JSON,
     folder_metadata JSON                    -- Parsed meta.json content
 );

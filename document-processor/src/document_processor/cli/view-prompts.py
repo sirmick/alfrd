@@ -22,13 +22,14 @@ def format_prompt_text(text: str, max_length: int = 80) -> str:
     return text[:max_length] + "..."
 
 
-def view_prompts(prompt_type: str = None, show_inactive: bool = False):
+def view_prompts(prompt_type: str = None, show_inactive: bool = False, show_full: bool = False):
     """
     Display prompts from database.
     
     Args:
         prompt_type: Filter by 'classifier' or 'summarizer'
         show_inactive: Include inactive (old) versions
+        show_full: Show full prompt text without truncation
     """
     settings = Settings()
     conn = duckdb.connect(str(settings.database_path))
@@ -114,11 +115,13 @@ def view_prompts(prompt_type: str = None, show_inactive: bool = False):
             
             # Show prompt text (truncated or full based on flag)
             print(f"\n  Prompt Text ({len(text.split())} words):")
-            if len(text) > 200:
+            if show_full or len(text) <= 200:
+                # Indent each line for readability
+                for line in text.split('\n'):
+                    print(f"  {line}")
+            else:
                 print(f"  {text[:200]}...")
                 print(f"  [truncated - {len(text)} chars total]")
-            else:
-                print(f"  {text}")
         
         print("\n" + "=" * 100)
         
@@ -133,6 +136,7 @@ def view_prompts(prompt_type: str = None, show_inactive: bool = False):
         
         print("\n💡 Tips:")
         print("   - Use --all to see archived versions")
+        print("   - Use --full to see complete prompt text")
         print("   - Use --type classifier or --type summarizer to filter")
         print("   - Prompts evolve when performance improves by 0.05 or drops below 0.7")
         print()
@@ -169,12 +173,19 @@ Examples:
         help="Show all versions including archived"
     )
     
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Show full prompt text without truncation"
+    )
+    
     args = parser.parse_args()
     
     try:
         view_prompts(
             prompt_type=args.type,
-            show_inactive=args.all
+            show_inactive=args.all,
+            show_full=args.full
         )
     except Exception as e:
         print(f"\n❌ Error: {e}\n")
