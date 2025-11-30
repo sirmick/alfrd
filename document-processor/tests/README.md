@@ -1,4 +1,4 @@
-# API Server Tests
+# Document Processor Tests
 
 ## Status
 
@@ -6,7 +6,7 @@ The legacy DuckDB-based tests have been removed as part of the PostgreSQL migrat
 
 ## Current Tests
 
-The database layer used by the API is tested via:
+The database layer is tested via:
 - `shared/tests/test_database.py` - Comprehensive PostgreSQL database tests (20 tests)
 
 ## Running Tests
@@ -26,8 +26,7 @@ Tests use a separate PostgreSQL test database (`alfrd_test`) that is created and
 
 ## Future Work
 
-API integration tests should be added using:
-- FastAPI TestClient for endpoint testing
-- pytest fixtures for test database and sample data
-- Mock authentication if/when added
-- Test coverage for all API endpoints
+Integration tests for workers and end-to-end pipeline testing should be added using:
+- pytest fixtures for test database setup
+- Mock LLM responses for classifier/summarizer tests
+- Sample documents in fixtures directory

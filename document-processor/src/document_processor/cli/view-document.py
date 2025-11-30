@@ -12,6 +12,7 @@ import argparse
 import sys
 from pathlib import Path
 from datetime import datetime
+import asyncio
 
 # Add project root to path (go up to esec/)
 _script_dir = Path(__file__).resolve()
@@ -19,7 +20,7 @@ _project_root = _script_dir.parent.parent.parent.parent.parent  # cli/ -> docume
 sys.path.insert(0, str(_project_root))
 
 from shared.config import Settings
-import duckdb
+from shared.database import AlfrdDatabase
 
 
 def format_field(label: str, value, width: int = 20):
@@ -29,36 +30,53 @@ def format_field(label: str, value, width: int = 20):
     return f"{label:>{width}}: {value}"
 
 
-def view_document(doc_id: str, settings: Settings):
+async def view_document(doc_id: str, settings: Settings):
     """View detailed information about a document."""
-    conn = duckdb.connect(str(settings.database_path))
+    db = AlfrdDatabase(
+        database_url=settings.database_url,
+        pool_min_size=1,
+        pool_max_size=3,
+        pool_timeout=30.0
+    )
+    await db.initialize()
     
     try:
-        # Get document info
-        result = conn.execute("""
-            SELECT
-                id, filename, status, document_type,
-                classification_confidence, classification_reasoning,
-                suggested_type, secondary_tags,
-                vendor, amount, due_date,
-                created_at, updated_at, processed_at,
-                extracted_text, extracted_text_path,
-                folder_path, error_message, structured_data,
-                tags, folder_metadata
-            FROM documents
-            WHERE id = ? OR id LIKE ?
-        """, [doc_id, f"{doc_id}%"]).fetchone()
+        # Get document info - try full ID first
+        doc = await db.get_document(doc_id)
         
-        if not result:
+        # If not found, try searching by partial ID
+        if not doc:
+            all_docs = await db.list_documents(limit=1000)
+            matching = [d for d in all_docs if d['id'].startswith(doc_id)]
+            if matching:
+                doc = matching[0]
+        
+        if not doc:
             print(f"❌ Document not found: {doc_id}")
             return
         
-        # Unpack results
-        (id, filename, status, doc_type, confidence, reasoning,
-         suggested_type, secondary_tags,
-         vendor, amount, due_date, created, updated, processed,
-         text, text_path, folder, error, structured_data,
-         tags, folder_metadata) = result
+        # Extract fields
+        id = doc['id']
+        filename = doc['filename']
+        status = doc['status']
+        doc_type = doc.get('document_type')
+        confidence = doc.get('classification_confidence')
+        reasoning = doc.get('classification_reasoning')
+        suggested_type = doc.get('suggested_type')
+        secondary_tags = doc.get('secondary_tags')
+        vendor = doc.get('vendor')
+        amount = doc.get('amount')
+        due_date = doc.get('due_date')
+        created = doc['created_at']
+        updated = doc['updated_at']
+        processed = doc.get('processed_at')
+        text = doc.get('extracted_text')
+        text_path = doc.get('extracted_text_path')
+        folder = doc.get('folder_path')
+        error = doc.get('error_message')
+        structured_data = doc.get('structured_data')
+        tags = doc.get('tags')
+        folder_metadata = doc.get('folder_metadata')
         
         # Display header
         print("\n" + "=" * 80)
@@ -188,27 +206,28 @@ def view_document(doc_id: str, settings: Settings):
         print("=" * 80)
         
     finally:
-        conn.close()
+        await db.close()
 
 
-def list_documents(settings: Settings, limit: int = 10):
+async def list_documents(settings: Settings, limit: int = 10):
     """List recent documents."""
-    conn = duckdb.connect(str(settings.database_path))
+    db = AlfrdDatabase(
+        database_url=settings.database_url,
+        pool_min_size=1,
+        pool_max_size=3,
+        pool_timeout=30.0
+    )
+    await db.initialize()
     
     try:
-        results = conn.execute("""
-            SELECT id, filename, status, document_type, created_at
-            FROM documents
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, [limit]).fetchall()
+        docs = await db.list_documents(limit=limit)
         
-        if not results:
+        if not docs:
             print("📭 No documents found in database")
             return
         
         print("\n" + "=" * 80)
-        print(f"📚 RECENT DOCUMENTS (showing {len(results)})")
+        print(f"📚 RECENT DOCUMENTS (showing {len(docs)})")
         print("=" * 80)
         print()
         
@@ -216,12 +235,12 @@ def list_documents(settings: Settings, limit: int = 10):
         print(f"{'ID':<38} {'Filename':<30} {'Status':<15} {'Type':<10} {'Created':<20}")
         print("-" * 115)
         
-        for row in results:
-            doc_id = row[0]  # Show full UUID
-            filename = row[1][:28] + "..." if len(row[1]) > 28 else row[1]
-            status = row[2]
-            doc_type = row[3] if row[3] else "-"
-            created = str(row[4])[:19]
+        for doc in docs:
+            doc_id = doc['id']
+            filename = doc['filename'][:28] + "..." if len(doc['filename']) > 28 else doc['filename']
+            status = doc['status']
+            doc_type = doc.get('document_type') or "-"
+            created = str(doc['created_at'])[:19]
             
             print(f"{doc_id:<38} {filename:<30} {status:<15} {doc_type:<10} {created:<20}")
         
@@ -230,47 +249,44 @@ def list_documents(settings: Settings, limit: int = 10):
         print()
         
     finally:
-        conn.close()
+        await db.close()
 
 
-def show_stats(settings: Settings):
+async def show_stats(settings: Settings):
     """Show document statistics."""
-    conn = duckdb.connect(str(settings.database_path))
+    db = AlfrdDatabase(
+        database_url=settings.database_url,
+        pool_min_size=1,
+        pool_max_size=3,
+        pool_timeout=30.0
+    )
+    await db.initialize()
     
     try:
-        # Status counts
-        status_counts = conn.execute("""
-            SELECT status, COUNT(*) as count
-            FROM documents
-            GROUP BY status
-            ORDER BY count DESC
-        """).fetchall()
-        
-        # Type counts
-        type_counts = conn.execute("""
-            SELECT document_type, COUNT(*) as count
-            FROM documents
-            WHERE document_type IS NOT NULL
-            GROUP BY document_type
-            ORDER BY count DESC
-        """).fetchall()
+        stats = await db.get_stats()
         
         print("\n" + "=" * 80)
         print("📊 DOCUMENT STATISTICS")
         print("=" * 80)
         print()
         
-        if status_counts:
+        # Status counts
+        if stats.get('by_status'):
             print("Documents by Status:")
             print("-" * 40)
-            for status, count in status_counts:
+            # Sort by count DESC
+            sorted_status = sorted(stats['by_status'].items(), key=lambda x: x[1], reverse=True)
+            for status, count in sorted_status:
                 print(f"  {status:<20} {count:>5} documents")
             print()
         
-        if type_counts:
+        # Type counts
+        if stats.get('by_type'):
             print("Documents by Type:")
             print("-" * 40)
-            for doc_type, count in type_counts:
+            # Sort by count DESC
+            sorted_types = sorted(stats['by_type'].items(), key=lambda x: x[1], reverse=True)
+            for doc_type, count in sorted_types:
                 print(f"  {doc_type:<20} {count:>5} documents")
             print()
         
@@ -278,7 +294,7 @@ def show_stats(settings: Settings):
         print()
         
     finally:
-        conn.close()
+        await db.close()
 
 
 def main():
@@ -340,31 +356,27 @@ Examples:
         print("  Make sure .env file exists and is configured")
         sys.exit(1)
     
-    # Check database exists
-    if not settings.database_path.exists():
-        print(f"✗ Database not found: {settings.database_path}")
-        print("  Run: python3 scripts/init-db.py")
-        sys.exit(1)
+    # Execute command (async)
+    async def run_command():
+        try:
+            if args.stats:
+                await show_stats(settings)
+            elif args.list:
+                await list_documents(settings)
+            elif args.recent:
+                await list_documents(settings, args.recent)
+            elif args.document_id:
+                await view_document(args.document_id, settings)
+            else:
+                # Default: list recent documents
+                await list_documents(settings)
+        except Exception as e:
+            print(f"\n✗ Error: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
     
-    # Execute command
-    try:
-        if args.stats:
-            show_stats(settings)
-        elif args.list:
-            list_documents(settings)
-        elif args.recent:
-            list_documents(settings, args.recent)
-        elif args.document_id:
-            view_document(args.document_id, settings)
-        else:
-            # Default: list recent documents
-            list_documents(settings)
-    
-    except Exception as e:
-        print(f"\n✗ Error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    asyncio.run(run_command())
 
 
 if __name__ == "__main__":

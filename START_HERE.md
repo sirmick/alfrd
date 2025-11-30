@@ -2,9 +2,9 @@
 
 **Automated Ledger & Filing Research Database**
 
-> **Current Status:** Phase 1C Complete - Self-Improving MCP-Based Pipeline ✅
+> **Current Status:** Phase 1C Complete + Phase 2A Partial ✅
 >
-> 5-worker pipeline with dynamic prompts that evolve based on performance feedback.
+> 5-worker self-improving pipeline + basic PWA interface with API server.
 
 ## Initial Setup
 
@@ -319,9 +319,10 @@ pip install -e ./mcp-server
 # Add a document
 ./scripts/add-document <path-to-file> [--tags tag1 tag2] [--source mobile]
 
-# Process documents
-./scripts/start-processor           # Continuous mode
-./scripts/start-processor --once    # Process once and exit
+# Process documents (5-worker self-improving pipeline)
+python3 document-processor/src/document_processor/main.py
+# Or process once and exit:
+python3 document-processor/src/document_processor/main.py --once
 
 # View documents
 ./scripts/view-document <doc-id>    # Show specific document
@@ -334,24 +335,35 @@ pip install -e ./mcp-server
 ./scripts/view-prompts --type summarizer  # Only summarizer prompts
 ./scripts/view-prompts --archived         # Include archived versions
 
-# Test pipeline
-./samples/test-pipeline.sh          # Complete end-to-end test
+# Test complete pipeline
+./samples/test-pipeline.sh          # End-to-end test with sample document
+```
+
+### API Server Commands
+
+```bash
+# Start API server (implements 5 endpoints)
+python3 api-server/src/api_server/main.py
+# Or use script:
+./scripts/start-api
+
+# Test API endpoints
+curl http://localhost:8000/api/v1/health
+curl http://localhost:8000/api/v1/documents
+curl http://localhost:8000/api/v1/documents/{doc-id}
 ```
 
 ### Development Commands
 
 ```bash
-# Run tests
+# Run all tests (14/14 passing)
 pytest document-processor/tests/ -v
 
 # Test OCR extraction
 python samples/test_ocr.py samples/pg\&e-bill.jpg
 
-# Start API server (not fully functional yet)
-./scripts/start-api
-
-# Start MCP server (stub only)
-./scripts/start-mcp
+# Start web UI (Ionic React PWA)
+cd web-ui && npm run dev
 ```
 
 ## Next Steps

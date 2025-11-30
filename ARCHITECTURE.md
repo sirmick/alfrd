@@ -1512,17 +1512,21 @@ docker-compose up
    - Document filesystem backup
    - User export functionality
 
-### Architecture Decisions - Phase 1B Complete
+### Architecture Decisions - Phase 1C Complete + Phase 2A Partial
 
 ✅ **Validated:**
 - **DuckDB** - Performing well for document storage and queries
-- **AWS Textract** - Chosen over Claude Vision for production OCR quality
+- **AWS Textract** - Chosen over Claude Vision for production OCR quality (95%+ accuracy)
 - **Worker Pool Pattern** - State-machine-driven polling works efficiently
-- **MCP as Library** - Direct import is simpler than separate server process
-- **BedrockClient** - Multi-model support (Claude + Nova) working well
+- **MCP as Library** - Direct import working well, no separate server process needed
+- **BedrockClient** - Multi-model support (Claude Sonnet 4 + Amazon Nova) working well
+- **Self-Improving Prompts** - Prompt evolution system tested and functional
+- **FastAPI** - API server with 5 endpoints implemented and tested
+- **Ionic React** - Basic PWA UI structure created successfully
 
 ⏳ **To Validate:**
-- **React + Capacitor** - Will validate in Phase 2 PWA implementation
+- **Camera Capture** - UI structure ready, needs backend integration testing
+- **PWA Offline Support** - Not yet implemented
 - **Supervisord** - Sufficient for single-container, may need K8s for multi-user
 
 ---
@@ -1551,12 +1555,13 @@ This architecture provides a solid foundation for the ALFRD (Automated Ledger & 
 - ✅ Comprehensive logging and error handling
 - ✅ Test suite (11/11 tests passing)
 
-### Next Phase (Phase 2 - PWA Interface):
+### Next Phase (Phase 2B - Complete PWA Integration):
 
-1. Build Ionic PWA with camera capture
-2. Add image upload API endpoint
-3. Enable mobile photo → process → view workflow
-4. Add integration tests for full pipeline
-5. Implement hierarchical summaries
+1. ⏳ Wire up camera capture to API upload
+2. ⏳ Fetch and display documents from API in UI
+3. ⏳ Test end-to-end mobile workflow
+4. ⏳ Add real-time status updates in UI
+5. ❌ Implement hierarchical summaries (not started)
+6. ❌ Add financial CSV exports (not started)
 
 The system is ready for the next milestone: mobile photo capture and PWA interface.

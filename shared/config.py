@@ -16,8 +16,19 @@ class Settings(BaseSettings):
     claude_api_key: str = ""
     openrouter_api_key: str = ""
     
-    # Paths - default to ./data for local development
-    database_path: Path = Path("./data/alfrd.db")
+    # Database Configuration (PostgreSQL)
+    # Unix socket connection (preferred for local dev): postgresql://user@/dbname?host=/var/run/postgresql
+    # TCP connection: postgresql://user:password@host:port/dbname
+    database_url: str = "postgresql://alfrd_user@/alfrd?host=/var/run/postgresql"
+    postgres_password: str = "alfrd_dev_password"
+    
+    # Connection Pool Settings
+    db_pool_min_size: int = 5
+    db_pool_max_size: int = 20
+    db_pool_timeout: float = 30.0  # seconds
+    
+    # Legacy paths - keeping for backward compatibility
+    database_path: Path = Path("./data/alfrd.db")  # DuckDB (deprecated)
     inbox_path: Path = Path("./data/inbox")
     documents_path: Path = Path("./data/documents")
     summaries_path: Path = Path("./data/summaries")

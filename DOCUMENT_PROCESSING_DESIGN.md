@@ -1,6 +1,6 @@
 # ALFRD Document Processing Architecture Design
 
-**Status:** ✅ Phase 1A Complete | 🚧 Phase 1B In Progress (Worker Architecture)
+**Status:** ✅ Phase 1C Complete - Self-Improving Prompts | 🚧 Phase 2A Partial - PWA Interface
 
 ---
 
@@ -172,7 +172,7 @@ class OCRWorker(BaseWorker):
 - `{doc_id}_llm.json` - LLM-optimized format with blocks
 - DB field: `extracted_text` (for classification)
 
-### ClassifierWorker (⏳ To Implement)
+### ClassifierWorker (✅ Implemented)
 
 **Purpose:** Classify documents as junk/bill/finance using MCP + Bedrock
 
@@ -207,7 +207,7 @@ WHERE id = doc_id
 - Testable: Mock MCP server for tests
 - Flexible: Easy to change prompts/models
 
-### WorkflowWorker (⏳ To Implement)
+### WorkflowWorker (⚠️ DEPRECATED - Replaced by SummarizerWorker + Scorer Workers)
 
 **Purpose:** Route classified documents to type-specific handlers
 
@@ -461,16 +461,23 @@ document-processor/
 - ✅ Modular (workers are independent)
 - ✅ Testable (6/6 tests passing)
 
+**Completed:**
+1. ✅ OCRWorker with AWS Textract
+2. ✅ ClassifierWorker with MCP (DB-driven prompts)
+3. ✅ ClassifierScorerWorker (evaluates and evolves classifier prompt)
+4. ✅ SummarizerWorker (generic DB-driven, replaces WorkflowWorker)
+5. ✅ SummarizerScorerWorker (evaluates and evolves summarizer prompts)
+6. ✅ Main.py orchestrator running 5-worker self-improving pipeline
+7. ✅ Integration tests (14/14 tests passing)
+
 **Next Steps:**
-1. Add OCRWorker tests
-2. Implement ClassifierWorker with MCP
-3. Implement WorkflowWorker with handlers
-4. Update main.py to run worker pools
-5. Add integration tests
+1. Complete PWA camera to API upload integration
+2. Add real-time status updates in UI
+3. Test end-to-end mobile workflow
 
 This design scales from a single laptop to distributed cloud deployment while maintaining simplicity and observability.
 
 ---
 
-**Last Updated:** 2024-11-25  
-**Status:** Phase 1B In Progress (Worker Architecture)
+**Last Updated:** 2025-11-26
+**Status:** Phase 1C Complete - Self-Improving Pipeline | Phase 2A Partial - PWA Interface

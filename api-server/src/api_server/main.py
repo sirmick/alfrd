@@ -4,22 +4,24 @@ import sys
 from pathlib import Path
 import uuid
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 import json
 import logging
 import traceback
+from contextlib import asynccontextmanager
+from uuid import UUID
 
 # Add project root to path for shared imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import uvicorn
-import duckdb
 
 from shared.config import Settings
+from shared.database import AlfrdDatabase
 
 # Configure logging
 logging.basicConfig(
@@ -31,11 +33,48 @@ logger = logging.getLogger(__name__)
 # Initialize settings
 settings = Settings()
 
-# Create FastAPI app
+# Global database instance
+db: Optional[AlfrdDatabase] = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifespan (startup/shutdown)."""
+    global db
+    
+    # Startup: Initialize database connection pool
+    logger.info("Initializing database connection pool...")
+    db = AlfrdDatabase(
+        database_url=settings.database_url,
+        pool_min_size=5,
+        pool_max_size=20,
+        pool_timeout=30.0
+    )
+    await db.initialize()
+    logger.info("Database connection pool initialized")
+    
+    yield
+    
+    # Shutdown: Close database connection pool
+    logger.info("Closing database connection pool...")
+    if db:
+        await db.close()
+    logger.info("Database connection pool closed")
+
+
+async def get_db() -> AlfrdDatabase:
+    """Dependency for getting database instance."""
+    if db is None:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+    return db
+
+
+# Create FastAPI app with lifespan
 app = FastAPI(
     title="esec API",
     description="AI Document Secretary API",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan
 )
 
 # CORS middleware
@@ -59,14 +98,21 @@ async def root():
 
 
 @app.get("/api/v1/health")
-async def health_check():
+async def health_check(database: AlfrdDatabase = Depends(get_db)):
     """Health check endpoint."""
-    # TODO: Check database connection
+    db_status = "healthy"
+    try:
+        # Simple query to check database connectivity
+        await database.get_stats()
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        db_status = "unhealthy"
+    
     return {
-        "status": "healthy",
+        "status": "healthy" if db_status == "healthy" else "degraded",
         "services": {
             "api": "healthy",
-            "database": "not_implemented",
+            "database": db_status,
             "processor": "unknown",
             "mcp": "unknown"
         }
@@ -104,7 +150,7 @@ async def upload_image(file: UploadFile = File(...)):
     
     # Generate document ID and create folder
     doc_id = str(uuid.uuid4())
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     folder_name = f"mobile_upload_{timestamp}"
     
     inbox_path = settings.inbox_path / folder_name
@@ -127,7 +173,7 @@ async def upload_image(file: UploadFile = File(...)):
     # Create meta.json
     meta = {
         "id": doc_id,
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": datetime.now(timezone.utc).isoformat() + "Z",
         "documents": [
             {
                 "file": f"photo{ext}",
@@ -160,7 +206,8 @@ async def list_documents(
     status: Optional[str] = Query(None, description="Filter by status (e.g., 'completed', 'pending')"),
     document_type: Optional[str] = Query(None, description="Filter by document type (e.g., 'bill', 'finance')"),
     limit: int = Query(50, ge=1, le=200, description="Number of documents to return"),
-    offset: int = Query(0, ge=0, description="Number of documents to skip")
+    offset: int = Query(0, ge=0, description="Number of documents to skip"),
+    database: AlfrdDatabase = Depends(get_db)
 ):
     """
     List documents from the database with optional filtering.
@@ -176,57 +223,32 @@ async def list_documents(
     """
     logger.info(f"GET /api/v1/documents - status={status}, type={document_type}, limit={limit}, offset={offset}")
     try:
-        logger.debug(f"Database path: {settings.database_path}")
-        # Build query
-        query = """
-            SELECT
-                id,
-                created_at,
-                status,
-                document_type,
-                suggested_type,
-                secondary_tags,
-                confidence,
-                classification_confidence,
-                summary,
-                structured_data
-            FROM documents
-            WHERE 1=1
-        """
-        params = []
+        # Get documents from database
+        documents = await database.list_documents_api(
+            limit=limit,
+            offset=offset,
+            status=status,
+            document_type=document_type
+        )
         
-        if status:
-            query += " AND status = ?"
-            params.append(status)
+        logger.info(f"Query returned {len(documents)} documents")
         
-        if document_type:
-            query += " AND document_type = ?"
-            params.append(document_type)
-        
-        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-        
-        # Execute query
-        logger.debug(f"Executing query: {query}")
-        logger.debug(f"Query params: {params}")
-        
-        conn = duckdb.connect(str(settings.database_path))
-        result = conn.execute(query, params).fetchall()
-        columns = [desc[0] for desc in conn.description]
-        conn.close()
-        
-        logger.info(f"Query returned {len(result)} documents")
-        
-        # Format results
-        documents = []
-        for row in result:
-            doc = dict(zip(columns, row))
-            # Parse JSON fields
-            if doc.get('secondary_tags'):
-                doc['secondary_tags'] = json.loads(doc['secondary_tags'])
-            if doc.get('structured_data'):
-                doc['structured_data'] = json.loads(doc['structured_data'])
-            documents.append(doc)
+        # Normalize data for JSON serialization
+        for doc in documents:
+            # Convert UUIDs to strings
+            if doc.get('id'):
+                doc['id'] = str(doc['id'])
+            
+            # Ensure secondary_tags is an array (not null or dict)
+            if doc.get('secondary_tags') is None:
+                doc['secondary_tags'] = []
+            elif not isinstance(doc.get('secondary_tags'), list):
+                # If it's a dict or other type, wrap it or convert it
+                doc['secondary_tags'] = []
+            
+            # Ensure structured_data is an object (not null)
+            if doc.get('structured_data') is None:
+                doc['structured_data'] = {}
         
         response = {
             "documents": documents,
@@ -244,7 +266,7 @@ async def list_documents(
 
 
 @app.get("/api/v1/documents/{document_id}")
-async def get_document(document_id: str):
+async def get_document(document_id: str, database: AlfrdDatabase = Depends(get_db)):
     """
     Get full details for a specific document.
     
@@ -256,53 +278,29 @@ async def get_document(document_id: str):
     """
     logger.info(f"GET /api/v1/documents/{document_id}")
     try:
-        logger.debug(f"Database path: {settings.database_path}")
-        conn = duckdb.connect(str(settings.database_path))
-        result = conn.execute(
-            """
-            SELECT
-                id,
-                created_at,
-                updated_at,
-                status,
-                document_type,
-                suggested_type,
-                secondary_tags,
-                original_path,
-                raw_document_path,
-                extracted_text_path,
-                extracted_text,
-                confidence,
-                classification_confidence,
-                classification_reasoning,
-                summary,
-                structured_data,
-                error_message,
-                user_id
-            FROM documents
-            WHERE id = ?
-            """,
-            [document_id]
-        ).fetchone()
+        # Parse UUID
+        try:
+            doc_uuid = UUID(document_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid document ID format: {document_id}")
         
-        if not result:
-            conn.close()
+        # Get document from database
+        doc = await database.get_document_full(doc_uuid)
+        
+        if not doc:
             raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
         
-        columns = [desc[0] for desc in conn.description]
-        conn.close()
+        # Normalize data for JSON serialization
+        doc['id'] = str(doc['id'])
         
-        # Build document dict
-        doc = dict(zip(columns, result))
+        # Ensure JSONB fields are properly formatted
+        if doc.get('secondary_tags') is None:
+            doc['secondary_tags'] = []
+        elif not isinstance(doc.get('secondary_tags'), list):
+            doc['secondary_tags'] = []
         
-        # Parse JSON fields
-        json_fields = ['secondary_tags', 'structured_data']
-        for field in json_fields:
-            if doc.get(field):
-                try:
-                    doc[field] = json.loads(doc[field])
-                except:
-                    pass
+        if doc.get('structured_data') is None:
+            doc['structured_data'] = {}
         
         # Add file links from raw_document_path (permanent storage)
         doc['files'] = []
@@ -329,7 +327,7 @@ async def get_document(document_id: str):
 
 
 @app.get("/api/v1/documents/{document_id}/file/{filename}")
-async def get_document_file(document_id: str, filename: str):
+async def get_document_file(document_id: str, filename: str, database: AlfrdDatabase = Depends(get_db)):
     """
     Serve original document files (images, PDFs, etc.).
     
@@ -342,20 +340,21 @@ async def get_document_file(document_id: str, filename: str):
     """
     logger.info(f"GET /api/v1/documents/{document_id}/file/{filename}")
     try:
-        # Get document's raw_document_path from database
-        conn = duckdb.connect(str(settings.database_path))
-        result = conn.execute(
-            "SELECT raw_document_path, original_path FROM documents WHERE id = ?",
-            [document_id]
-        ).fetchone()
-        conn.close()
+        # Parse UUID
+        try:
+            doc_uuid = UUID(document_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid document ID format: {document_id}")
         
-        if not result:
+        # Get document's paths from database
+        paths = await database.get_document_paths(doc_uuid)
+        
+        if not paths:
             raise HTTPException(status_code=404, detail="Document not found")
         
         # Try raw_document_path first (permanent storage), fallback to original_path (inbox)
-        raw_path = result[0]
-        original_path = result[1]
+        raw_path = paths.get('raw_document_path')
+        original_path = paths.get('original_path')
         
         if raw_path and Path(raw_path).exists():
             file_path = Path(raw_path) / filename

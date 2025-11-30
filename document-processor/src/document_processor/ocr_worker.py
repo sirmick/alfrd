@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import List
 import sys
 import json
-import duckdb
 
 # Add parent directories to path
 _script_dir = Path(__file__).parent.parent.parent.parent
@@ -15,6 +14,7 @@ sys.path.insert(0, str(_script_dir))
 from shared.config import Settings
 from shared.types import DocumentStatus
 from shared.constants import META_JSON_FILENAME
+from shared.database import AlfrdDatabase
 from document_processor.workers import BaseWorker
 from document_processor.detector import FileDetector
 from document_processor.extractors.aws_textract import TextractExtractor
@@ -26,15 +26,17 @@ logger = logging.getLogger(__name__)
 class OCRWorker(BaseWorker):
     """Worker that processes documents in 'pending' status with OCR."""
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, db: AlfrdDatabase):
         """
         Initialize OCR worker.
         
         Args:
             settings: Application settings
+            db: Shared AlfrdDatabase instance
         """
         super().__init__(
             settings=settings,
+            db=db,
             worker_name="OCR Worker",
             source_status=DocumentStatus.PENDING,
             target_status=DocumentStatus.OCR_COMPLETED,
@@ -53,28 +55,7 @@ class OCRWorker(BaseWorker):
         Returns:
             List of document dictionaries
         """
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            results = conn.execute("""
-                SELECT id, filename, folder_path, original_path
-                FROM documents
-                WHERE status = ?
-                ORDER BY created_at ASC
-                LIMIT ?
-            """, [status.value, limit]).fetchall()
-            
-            documents = []
-            for row in results:
-                documents.append({
-                    "id": row[0],
-                    "filename": row[1],
-                    "folder_path": row[2],
-                    "original_path": row[3],
-                })
-            
-            return documents
-        finally:
-            conn.close()
+        return await self.db.get_documents_by_status(status, limit)
     
     async def process_document(self, document: dict) -> bool:
         """
@@ -183,39 +164,32 @@ class OCRWorker(BaseWorker):
             }
             
             # Store extracted data in database
-            conn = duckdb.connect(str(self.settings.database_path))
-            try:
-                # Create paths for storage
-                from datetime import datetime
-                now = datetime.utcnow()
-                year_month = now.strftime("%Y/%m")
-                base_path = self.settings.documents_path / year_month
-                text_path = base_path / "text"
-                text_path.mkdir(parents=True, exist_ok=True)
-                
-                # Save LLM-formatted data
-                llm_file = text_path / f"{doc_id}_llm.json"
-                llm_file.write_text(json.dumps(llm_formatted, indent=2))
-                
-                # Save full text
-                text_file = text_path / f"{doc_id}.txt"
-                text_file.write_text(full_text)
-                
-                # Update database with extracted text
-                conn.execute("""
-                    UPDATE documents 
-                    SET extracted_text = ?,
-                        extracted_text_path = ?,
-                        updated_at = ?
-                    WHERE id = ?
-                """, [full_text, str(text_file), now, doc_id])
-                
-                logger.info(
-                    f"OCR complete for {doc_id}: {len(full_text)} chars, "
-                    f"{avg_confidence:.2%} confidence"
-                )
-            finally:
-                conn.close()
+            from shared.database import utc_now
+            now = utc_now()
+            year_month = now.strftime("%Y/%m")
+            base_path = self.settings.documents_path / year_month
+            text_path = base_path / "text"
+            text_path.mkdir(parents=True, exist_ok=True)
+            
+            # Save LLM-formatted data
+            llm_file = text_path / f"{doc_id}_llm.json"
+            llm_file.write_text(json.dumps(llm_formatted, indent=2))
+            
+            # Save full text
+            text_file = text_path / f"{doc_id}.txt"
+            text_file.write_text(full_text)
+            
+            # Update database with extracted text
+            await self.db.update_document(
+                doc_id=doc_id,
+                extracted_text=full_text,
+                extracted_text_path=str(text_file)
+            )
+            
+            logger.info(
+                f"OCR complete for {doc_id}: {len(full_text)} chars, "
+                f"{avg_confidence:.2%} confidence"
+            )
             
             # Update status to ocr_completed
             await self.update_status(doc_id, DocumentStatus.OCR_COMPLETED)

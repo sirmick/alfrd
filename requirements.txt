@@ -2,7 +2,6 @@
 boto3>=1.34.0
 fastapi>=0.109.0
 uvicorn>=0.27.0
-duckdb>=0.10.0
 watchdog>=3.0.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
@@ -11,6 +10,14 @@ httpx>=0.26.0
 python-magic>=0.4.27
 mcp>=0.9.0
 jinja2>=3.1.3
+
+# PostgreSQL database drivers (replacing DuckDB)
+asyncpg>=0.29.0          # Async PostgreSQL driver (primary)
+psycopg2-binary>=2.9.9   # Sync PostgreSQL driver (for migrations/scripts)
+
+# Optional: SQLAlchemy for ORM support
+# sqlalchemy>=2.0.23
+# alembic>=1.13.0        # Database migrations
 
 # Development dependencies
 pytest>=7.4.0

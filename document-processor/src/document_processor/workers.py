@@ -10,7 +10,6 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import List, Optional
-from datetime import datetime
 from pathlib import Path
 import sys
 
@@ -20,6 +19,7 @@ sys.path.insert(0, str(_script_dir))
 
 from shared.config import Settings
 from shared.types import DocumentStatus
+from shared.database import AlfrdDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ class BaseWorker(ABC):
     def __init__(
         self,
         settings: Settings,
+        db: AlfrdDatabase,
         worker_name: str,
         source_status: DocumentStatus,
         target_status: DocumentStatus,
@@ -45,6 +46,7 @@ class BaseWorker(ABC):
         
         Args:
             settings: Application settings
+            db: Shared AlfrdDatabase instance
             worker_name: Name for logging (e.g., "OCR Worker")
             source_status: Status to query for (e.g., DocumentStatus.PENDING)
             target_status: Status to set on success (e.g., DocumentStatus.OCR_COMPLETED)
@@ -52,6 +54,7 @@ class BaseWorker(ABC):
             poll_interval: Seconds between database polls
         """
         self.settings = settings
+        self.db = db
         self.worker_name = worker_name
         self.source_status = source_status
         self.target_status = target_status
@@ -174,27 +177,19 @@ class BaseWorker(ABC):
             status: New status
             error: Error message if status is FAILED
         """
-        import duckdb
+        # Get current document to prepare update dict
+        doc = await self.db.get_document(doc_id)
+        if not doc:
+            raise ValueError(f"Document {doc_id} not found")
         
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            if error:
-                conn.execute("""
-                    UPDATE documents 
-                    SET status = ?, error_message = ?, updated_at = ?
-                    WHERE id = ?
-                """, [status.value, error, datetime.utcnow(), doc_id])
-            else:
-                # Clear any previous error message
-                conn.execute("""
-                    UPDATE documents 
-                    SET status = ?, error_message = NULL, updated_at = ?
-                    WHERE id = ?
-                """, [status.value, datetime.utcnow(), doc_id])
-            
-            logger.debug(f"Updated document {doc_id} status to {status.value}")
-        finally:
-            conn.close()
+        # Update document with new status
+        await self.db.update_document(
+            doc_id=doc_id,
+            status=status,
+            error_message=error
+        )
+        
+        logger.debug(f"Updated document {doc_id} status to {status.value}")
 
 
 class WorkerPool:
@@ -225,26 +220,21 @@ class WorkerPool:
         """Start all workers and exit when no work remains."""
         logger.info(f"Starting worker pool in run-once mode with {len(self.workers)} workers")
         
-        import duckdb
         max_iterations = 100  # Safety limit to prevent infinite loops
         iteration = 0
         
         while iteration < max_iterations:
             iteration += 1
             
-            # Check if there's any pending work
-            conn = duckdb.connect(str(self.workers[0].settings.database_path))
-            try:
-                # Count documents that aren't in completed or failed status
-                result = conn.execute("""
-                    SELECT COUNT(*)
-                    FROM documents
-                    WHERE status NOT IN ('completed', 'failed')
-                """).fetchone()
-                
-                pending_count = result[0] if result else 0
-            finally:
-                conn.close()
+            # Check if there's any pending work using shared database
+            db = self.workers[0].db
+            stats = await db.get_stats()
+            
+            # Count documents not in completed or failed status
+            pending_count = sum(
+                count for status, count in stats.get('by_status', {}).items()
+                if status not in ['completed', 'failed']
+            )
             
             if pending_count == 0:
                 logger.info("No pending documents, run-once mode complete")

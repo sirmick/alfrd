@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Initialize DuckDB database with schema and generic prompts.
+"""Initialize PostgreSQL database with schema and generic prompts.
 
 This script CLEARS ALL EXISTING DATA and creates a fresh database.
 """
@@ -9,33 +9,35 @@ import shutil
 from pathlib import Path
 from uuid import uuid4
 from datetime import datetime
+import asyncio
 
 # Add project root to path (go up to esec/)
 _script_dir = Path(__file__).resolve()
 _project_root = _script_dir.parent.parent.parent.parent.parent  # cli/ -> document_processor/ -> src/ -> document-processor/ -> esec/
 sys.path.insert(0, str(_project_root))
 
-import duckdb
+import asyncpg
 from shared.config import Settings
 from shared.types import PromptType
 
 
-def init_database():
+async def init_database():
     """Initialize the database with the schema and default prompts.
     
-    WARNING: This deletes all existing data!
+    WARNING: This deletes all existing data in the filesystem!
     """
     settings = Settings()
-    db_path = settings.database_path
-    data_dir = settings.database_path.parent
+    data_dir = Path("./data")
     
     print(f"⚠️  WARNING: This will DELETE all existing data in {data_dir}")
     print()
     
-    # Clear everything in data directory
+    # Clear everything in data directory (except postgres)
     if data_dir.exists():
         print(f"🗑️  Clearing data directory: {data_dir}")
         for item in data_dir.iterdir():
+            if item.name == "postgres":
+                continue  # Don't delete PostgreSQL data
             if item.is_dir():
                 shutil.rmtree(item)
                 print(f"   Deleted directory: {item.name}")
@@ -49,16 +51,24 @@ def init_database():
     (data_dir / "documents").mkdir(exist_ok=True)
     print()
     
-    print(f"Initializing fresh database at {db_path}")
+    print(f"Initializing fresh database at {settings.database_url}")
     
-    # Create database connection
-    conn = duckdb.connect(str(db_path))
+    # Connect to PostgreSQL
+    try:
+        conn = await asyncpg.connect(dsn=settings.database_url)
+    except Exception as e:
+        print(f"ERROR: Failed to connect to PostgreSQL: {e}")
+        print(f"\nMake sure PostgreSQL is running and configured:")
+        print(f"  1. Run: ./scripts/configure-postgres-unix-socket.sh")
+        print(f"  2. Check DATABASE_URL in .env: {settings.database_url}")
+        return 1
     
     # Read schema file
     schema_path = _project_root / "api-server" / "src" / "api_server" / "db" / "schema.sql"
     
     if not schema_path.exists():
         print(f"ERROR: Schema file not found at {schema_path}")
+        await conn.close()
         return 1
     
     with open(schema_path) as f:
@@ -66,35 +76,45 @@ def init_database():
     
     # Execute schema
     try:
-        # Split by semicolon and execute each statement
-        statements = [s.strip() for s in schema_sql.split(';') if s.strip()]
-        for statement in statements:
-            conn.execute(statement)
+        # Drop all existing tables
+        print("Dropping existing tables...")
+        await conn.execute("""
+            DROP TABLE IF EXISTS classification_suggestions CASCADE;
+            DROP TABLE IF EXISTS processing_events CASCADE;
+            DROP TABLE IF EXISTS prompts CASCADE;
+            DROP TABLE IF EXISTS document_types CASCADE;
+            DROP TABLE IF EXISTS analytics CASCADE;
+            DROP TABLE IF EXISTS summaries CASCADE;
+            DROP TABLE IF EXISTS documents CASCADE;
+        """)
+        
+        # Execute schema (PostgreSQL can handle multi-statement execution)
+        await conn.execute(schema_sql)
         
         print(f"✓ Database schema created successfully")
         print(f"  Tables: documents, summaries, processing_events, analytics, prompts, classification_suggestions, document_types")
         
         # Initialize default prompts
         print("\nInitializing default prompts...")
-        _init_default_prompts(conn)
+        await _init_default_prompts(conn)
         
         # Initialize default document types
         print("\nInitializing default document types...")
-        _init_default_document_types(conn)
+        await _init_default_document_types(conn)
         
-        conn.close()
-        print(f"\n✓ Database initialized successfully at {db_path}")
+        await conn.close()
+        print(f"\n✓ Database initialized successfully")
         return 0
         
     except Exception as e:
         print(f"ERROR: Failed to initialize database: {e}")
         import traceback
         traceback.print_exc()
-        conn.close()
+        await conn.close()
         return 1
 
 
-def _init_default_prompts(conn):
+async def _init_default_prompts(conn):
     """Initialize default classifier and summarizer prompts."""
     now = datetime.utcnow()
     
@@ -125,12 +145,12 @@ Return JSON format:
     "secondary_tags": ["tag1", "tag2"]  // OPTIONAL: additional classification tags
 }"""
     
-    classifier_id = str(uuid4())
-    conn.execute("""
+    classifier_id = uuid4()
+    await conn.execute("""
         INSERT INTO prompts
         (id, prompt_type, document_type, prompt_text, version, is_active, created_at, updated_at)
-        VALUES (?, ?, NULL, ?, 1, true, ?, ?)
-    """, [classifier_id, PromptType.CLASSIFIER.value, classifier_prompt, now, now])
+        VALUES ($1, $2, NULL, $3, 1, true, $4, $5)
+    """, classifier_id, PromptType.CLASSIFIER.value, classifier_prompt, now, now)
     print(f"  ✓ Classifier prompt (v1, {len(classifier_prompt.split())} words)")
     
     # Default summarizer prompts for each document type
@@ -224,16 +244,16 @@ Return JSON with all relevant fields."""
     }
     
     for doc_type, prompt_text in summarizer_prompts.items():
-        summarizer_id = str(uuid4())
-        conn.execute("""
+        summarizer_id = uuid4()
+        await conn.execute("""
             INSERT INTO prompts
             (id, prompt_type, document_type, prompt_text, version, is_active, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 1, true, ?, ?)
-        """, [summarizer_id, PromptType.SUMMARIZER.value, doc_type, prompt_text, now, now])
+            VALUES ($1, $2, $3, $4, 1, true, $5, $6)
+        """, summarizer_id, PromptType.SUMMARIZER.value, doc_type, prompt_text, now, now)
         print(f"  ✓ Summarizer prompt for '{doc_type}' (v1)")
 
 
-def _init_default_document_types(conn):
+async def _init_default_document_types(conn):
     """Initialize default known document types."""
     now = datetime.utcnow()
     
@@ -247,14 +267,19 @@ def _init_default_document_types(conn):
     ]
     
     for type_name, description in default_types:
-        type_id = str(uuid4())
-        conn.execute("""
+        type_id = uuid4()
+        await conn.execute("""
             INSERT INTO document_types
             (id, type_name, description, is_active, usage_count, created_at)
-            VALUES (?, ?, ?, true, 0, ?)
-        """, [type_id, type_name, description, now])
+            VALUES ($1, $2, $3, true, 0, $4)
+        """, type_id, type_name, description, now)
         print(f"  ✓ Document type: {type_name}")
 
 
+def main():
+    """Run the async init_database function."""
+    return asyncio.run(init_database())
+
+
 if __name__ == "__main__":
-    sys.exit(init_database())
+    sys.exit(main())

@@ -5,10 +5,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 import sys
-import duckdb
 import json
-from uuid import uuid4
-from datetime import datetime
 
 # Add parent directories to path for standalone execution
 _script_dir = Path(__file__).parent.parent.parent.parent
@@ -17,6 +14,7 @@ sys.path.insert(0, str(_script_dir / "mcp-server" / "src"))  # MCP server source
 
 from shared.config import Settings
 from shared.types import DocumentStatus, PromptType
+from shared.database import AlfrdDatabase
 from document_processor.workers import BaseWorker
 
 # Import MCP tools
@@ -29,15 +27,17 @@ logger = logging.getLogger(__name__)
 class ClassifierWorker(BaseWorker):
     """Worker that classifies documents in 'ocr_completed' status using MCP."""
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, db: AlfrdDatabase):
         """
         Initialize Classifier worker.
         
         Args:
             settings: Application settings
+            db: Shared AlfrdDatabase instance
         """
         super().__init__(
             settings=settings,
+            db=db,
             worker_name="Classifier Worker",
             source_status=DocumentStatus.OCR_COMPLETED,
             target_status=DocumentStatus.CLASSIFIED,
@@ -53,46 +53,17 @@ class ClassifierWorker(BaseWorker):
         self._active_prompt: Optional[dict] = None
         self._known_types: Optional[List[str]] = None
     
-    def _get_active_prompt(self) -> dict:
+    async def _get_active_prompt(self) -> dict:
         """Get the active classifier prompt from database."""
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            result = conn.execute("""
-                SELECT id, prompt_text, version, performance_score
-                FROM prompts
-                WHERE prompt_type = ?
-                  AND document_type IS NULL
-                  AND is_active = true
-                ORDER BY version DESC
-                LIMIT 1
-            """, [PromptType.CLASSIFIER.value]).fetchone()
-            
-            if not result:
-                raise ValueError("No active classifier prompt found in database")
-            
-            return {
-                "id": result[0],
-                "prompt_text": result[1],
-                "version": result[2],
-                "performance_score": result[3]
-            }
-        finally:
-            conn.close()
+        prompt = await self.db.get_active_prompt(PromptType.CLASSIFIER)
+        if not prompt:
+            raise ValueError("No active classifier prompt found in database")
+        return prompt
     
-    def _get_known_types(self) -> List[str]:
+    async def _get_known_types(self) -> List[str]:
         """Get list of known document types from database."""
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            results = conn.execute("""
-                SELECT type_name
-                FROM document_types
-                WHERE is_active = true
-                ORDER BY usage_count DESC
-            """).fetchall()
-            
-            return [row[0] for row in results]
-        finally:
-            conn.close()
+        types = await self.db.get_document_types()
+        return [t['type_name'] for t in types]
     
     async def get_documents(self, status: DocumentStatus, limit: int) -> List[dict]:
         """
@@ -105,27 +76,7 @@ class ClassifierWorker(BaseWorker):
         Returns:
             List of document dictionaries
         """
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            results = conn.execute("""
-                SELECT id, filename, extracted_text
-                FROM documents
-                WHERE status = ?
-                ORDER BY created_at ASC
-                LIMIT ?
-            """, [status.value, limit]).fetchall()
-            
-            documents = []
-            for row in results:
-                documents.append({
-                    "id": row[0],
-                    "filename": row[1],
-                    "extracted_text": row[2],
-                })
-            
-            return documents
-        finally:
-            conn.close()
+        return await self.db.get_documents_by_status(status, limit)
     
     async def process_document(self, document: dict) -> bool:
         """
@@ -157,9 +108,9 @@ class ClassifierWorker(BaseWorker):
             
             # Get active prompt and known types
             if not self._active_prompt:
-                self._active_prompt = self._get_active_prompt()
+                self._active_prompt = await self._get_active_prompt()
             if not self._known_types:
-                self._known_types = self._get_known_types()
+                self._known_types = await self._get_known_types()
             
             # Call MCP tool for classification
             loop = asyncio.get_event_loop()
@@ -174,45 +125,30 @@ class ClassifierWorker(BaseWorker):
             )
             
             # Update database with classification results
-            conn = duckdb.connect(str(self.settings.database_path))
-            try:
-                conn.execute("""
-                    UPDATE documents
-                    SET document_type = ?,
-                        suggested_type = ?,
-                        secondary_tags = ?,
-                        classification_confidence = ?,
-                        classification_reasoning = ?,
-                        updated_at = ?
-                    WHERE id = ?
-                """, [
-                    classification["document_type"],
-                    classification.get("suggested_type"),
-                    json.dumps(classification.get("secondary_tags", [])),
-                    classification["confidence"],
-                    classification["reasoning"],
-                    datetime.utcnow(),
-                    doc_id
-                ])
-                
-                # If LLM suggested a new type, record it
-                if classification.get("suggested_type"):
-                    self._record_suggestion(
-                        conn,
-                        classification["suggested_type"],
-                        doc_id,
-                        classification["confidence"],
-                        classification.get("suggestion_reasoning", "")
-                    )
-                
-                logger.info(
-                    f"Classification complete for {doc_id}: "
-                    f"type={classification['document_type']}, "
-                    f"confidence={classification['confidence']:.2%}, "
-                    f"tags={classification.get('secondary_tags', [])}"
+            await self.db.update_document(
+                doc_id=doc_id,
+                document_type=classification["document_type"],
+                suggested_type=classification.get("suggested_type"),
+                secondary_tags=json.dumps(classification.get("secondary_tags", [])),
+                classification_confidence=classification["confidence"],
+                classification_reasoning=classification["reasoning"]
+            )
+            
+            # If LLM suggested a new type, record it
+            if classification.get("suggested_type"):
+                await self.db.record_classification_suggestion(
+                    suggested_type=classification["suggested_type"],
+                    document_id=doc_id,
+                    confidence=classification["confidence"],
+                    reasoning=classification.get("suggestion_reasoning", "")
                 )
-            finally:
-                conn.close()
+            
+            logger.info(
+                f"Classification complete for {doc_id}: "
+                f"type={classification['document_type']}, "
+                f"confidence={classification['confidence']:.2%}, "
+                f"tags={classification.get('secondary_tags', [])}"
+            )
             
             # Update status to classified
             await self.update_status(doc_id, DocumentStatus.CLASSIFIED)
@@ -225,13 +161,3 @@ class ClassifierWorker(BaseWorker):
             raise
     
     
-    def _record_suggestion(self, conn, suggested_type: str, doc_id: str, confidence: float, reasoning: str):
-        """Record a classification suggestion for review."""
-        suggestion_id = str(uuid4())
-        conn.execute("""
-            INSERT INTO classification_suggestions
-            (id, suggested_type, document_id, confidence, reasoning, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, [suggestion_id, suggested_type, doc_id, confidence, reasoning, datetime.utcnow()])
-        
-        logger.info(f"Recorded new type suggestion: {suggested_type} for document {doc_id}")

@@ -1,8 +1,8 @@
 # ALFRD - Development Progress
 
-**Last Updated:** 2024-11-25 (Pipeline Tested & Validated)
+**Last Updated:** 2025-11-26 (Status Audit Complete)
 
-## Current Phase: Phase 1C Complete - Self-Improving Prompts ✅
+## Current Phase: Phase 1C Complete + Phase 2A Partial ✅
 
 ### Pipeline Testing & Validation - COMPLETED
 
@@ -144,12 +144,12 @@ data/documents/2024/11/
 10. **Test suite** - Pytest tests for storage module
 11. **Standalone execution** - All scripts work without PYTHONPATH setup
 
-### ⏳ Partially Implemented
+### ✅ Phase 2A Partially Implemented
 
-1. **API Server** - Basic health endpoints only
-2. **MCP Server** - Stub only (classifier exists but not integrated)
-3. **Event emission** - Code exists but API not listening
-4. **Watcher mode** - Stub only, use batch mode for now
+1. **API Server** - ✅ Implemented with 5 endpoints (health, status, documents list/detail/file, upload-image)
+2. **Web UI** - ✅ Basic Ionic React PWA with 3 pages (CapturePage, DocumentsPage, DocumentDetailPage)
+3. **Image upload** - ⏳ API endpoint exists, needs integration testing
+4. **Camera capture** - ⏳ UI structure ready, needs backend wiring
 
 ### ✅ Phase 1B Complete
 
@@ -174,10 +174,12 @@ data/documents/2024/11/
 
 ### ❌ Not Yet Implemented
 
-1. **Web UI** - Not started
-2. **Real-time file watching** - Use batch mode with workers
-3. **Hierarchical summaries** - Not started
-4. **Analytics** - Not started
+1. **Real-time file watching** - watcher.py exists but not used (use batch mode --once instead)
+2. **Hierarchical summaries** - Not started (weekly → monthly → yearly)
+3. **Analytics dashboard** - Not started
+4. **Financial CSV exports** - Not started
+5. **Full PWA integration** - Camera to upload to API to processing workflow
+6. **Event emission** - events.py exists but not currently used
 
 ## Test Results
 
@@ -220,40 +222,44 @@ python samples/test_ocr.py samples/pg\&e-bill.jpg
 
 ## Statistics
 
-**Lines of Code (Phase 1A + 1B + 1C Complete + Testing):**
+**Lines of Code (Phase 1C Complete + Phase 2A Partial):**
 - Document Processor Core: ~800 lines (main.py, storage.py, detector.py, extractors)
 - Worker Infrastructure: ~418 lines (workers.py, ocr_worker.py)
-- Classifier Worker: ~280 lines (classifier_worker.py - DB-driven)
-- Scorer Workers: ~675 lines (scorer_workers.py - Refactored to use MCP tools)
-- Summarizer Worker: ~302 lines (summarizer_worker.py - NEW)
-- Workflow Worker: ~50 lines (workflow_worker.py - DEPRECATED)
+- Classifier Worker: ~237 lines (classifier_worker.py - DB-driven)
+- Scorer Workers: ~556 lines (scorer_workers.py - Using MCP tools)
+- Summarizer Worker: ~263 lines (summarizer_worker.py)
+- Workflow Worker: ~340 lines (workflow_worker.py - DEPRECATED, kept for reference)
 - MCP Server: ~400 lines (bedrock.py, classify_dynamic.py, score_performance.py, summarize_dynamic.py)
-- Tests: ~480 lines (test_storage.py, test_workers.py)
-- Helper Scripts: ~750 lines (add-document.py, init-db.py, view-document.py, view-prompts.py)
-- Database Schema: ~190 lines (schema.sql with new tables)
-- **Total New/Modified: ~5,000+ lines**
+- API Server: ~452 lines (main.py with 5 endpoints)
+- Web UI: ~100+ lines (App.jsx + 3 pages)
+- Tests: ~657 lines (test_storage.py, test_workers.py, test_pipeline_integration.py)
+- Helper Scripts: ~750 lines (add-document, init-db, view-document, view-prompts, test-pipeline)
+- Database Schema: ~190 lines (schema.sql with prompts, document_types, classification_suggestions)
+- **Total: ~5,200+ lines**
 
 **Test Coverage:**
 - Storage module: 100% (5/5 tests passing)
 - Worker infrastructure: 100% (6/6 tests passing)
-- **Total: 11/11 tests passing** ✅
-- Integration tests: 0% (pending for Phase 2)
+- Pipeline integration: 100% (3/3 tests passing)
+- **Total: 14/14 tests passing** ✅
 
 ## Next Steps
 
-### Immediate (Phase 2 - Testing & Validation)
-1. ✅ Test self-improving workflow with sample documents - COMPLETED
-2. ✅ Verify prompt evolution works correctly - COMPLETED (v1→v2 observed)
-3. ⏳ Test classification type suggestions - Need to test with diverse documents
-4. ✅ Validate scoring feedback loop - COMPLETED (scores being generated)
-5. ✅ Document prompt evolution behavior - COMPLETED (MCP architecture notes added)
-6. ⏳ Process multiple documents to observe continued evolution
+### Immediate (Phase 2B - Complete PWA Integration)
+1. ✅ Basic PWA UI structure created - COMPLETED
+2. ✅ API upload-image endpoint implemented - COMPLETED
+3. ⏳ Test camera capture to upload workflow
+4. ⏳ Wire up PWA to API server (fetch documents from API)
+5. ⏳ Test end-to-end: photo → upload → process → classify → summarize → view in UI
+6. ⏳ Add real-time document status updates in UI
 
-### Short Term (Phase 2 - PWA Interface)
-1. Create basic Ionic PWA with camera capture
-2. Add `/api/v1/documents/upload-image` endpoint to FastAPI
-3. Wire up image upload from PWA to API
-4. Test end-to-end: photo → upload → process → classify → summarize
+### Short Term (Phase 2C - Enhanced Features)
+1. Add document search in PWA
+2. Add document filtering by type/status in UI
+3. Improve UI/UX with better styling
+4. Add error handling and loading states
+5. Test offline functionality (if desired)
+6. Add file upload progress indicator
 
 ### Medium Term (Phase 3 - Enhanced Features)
 1. Add comprehensive integration tests for full pipeline

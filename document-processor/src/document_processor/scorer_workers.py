@@ -5,10 +5,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import sys
-import duckdb
 import json
-from uuid import uuid4
-from datetime import datetime
 
 # Add parent directories to path for standalone execution
 _script_dir = Path(__file__).parent.parent.parent.parent
@@ -17,6 +14,7 @@ sys.path.insert(0, str(_script_dir / "mcp-server" / "src"))  # MCP server source
 
 from shared.config import Settings
 from shared.types import DocumentStatus, PromptType, ScoringResult
+from shared.database import AlfrdDatabase
 from document_processor.workers import BaseWorker
 
 # Import MCP tools
@@ -33,15 +31,17 @@ logger = logging.getLogger(__name__)
 class ClassifierScorerWorker(BaseWorker):
     """Worker that scores classifier performance and evolves the prompt."""
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, db: AlfrdDatabase):
         """
         Initialize Classifier Scorer worker.
         
         Args:
             settings: Application settings
+            db: Shared AlfrdDatabase instance
         """
         super().__init__(
             settings=settings,
+            db=db,
             worker_name="Classifier Scorer Worker",
             source_status=DocumentStatus.CLASSIFIED,
             target_status=DocumentStatus.SCORED_CLASSIFICATION,
@@ -66,47 +66,28 @@ class ClassifierScorerWorker(BaseWorker):
         Returns:
             List of document dictionaries (empty if not enough for scoring)
         """
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            # Check how many classified documents we have
-            count_result = conn.execute("""
-                SELECT COUNT(*) 
-                FROM documents 
-                WHERE status = ?
-            """, [status.value]).fetchone()
+        # Check how many classified documents we have
+        docs = await self.db.get_documents_by_status(status, limit=1000)
+        classified_count = len(docs)
+        
+        # Only process if we have minimum documents for scoring
+        if classified_count < self.settings.min_documents_for_scoring:
+            return []
+        
+        # Get documents for scoring
+        documents = await self.db.get_documents_by_status(status, limit)
+        
+        # Parse secondary_tags from JSON string if needed
+        # Also ensure all expected fields are present
+        for doc in documents:
+            if isinstance(doc.get('secondary_tags'), str):
+                doc['secondary_tags'] = json.loads(doc['secondary_tags']) if doc['secondary_tags'] else []
             
-            classified_count = count_result[0] if count_result else 0
-            
-            # Only process if we have minimum documents for scoring
-            if classified_count < self.settings.min_documents_for_scoring:
-                return []
-            
-            # Get documents for scoring
-            results = conn.execute("""
-                SELECT id, filename, extracted_text, document_type, 
-                       classification_confidence, classification_reasoning,
-                       secondary_tags
-                FROM documents
-                WHERE status = ?
-                ORDER BY created_at ASC
-                LIMIT ?
-            """, [status.value, limit]).fetchall()
-            
-            documents = []
-            for row in results:
-                documents.append({
-                    "id": row[0],
-                    "filename": row[1],
-                    "extracted_text": row[2],
-                    "document_type": row[3],
-                    "classification_confidence": row[4],
-                    "classification_reasoning": row[5],
-                    "secondary_tags": json.loads(row[6]) if row[6] else [],
-                })
-            
-            return documents
-        finally:
-            conn.close()
+            # Add default values for any missing fields
+            doc.setdefault('classification_confidence', doc.get('confidence', 0.0))
+            doc.setdefault('classification_reasoning', '')
+        
+        return documents
     
     async def process_document(self, document: dict) -> bool:
         """
@@ -133,16 +114,16 @@ class ClassifierScorerWorker(BaseWorker):
             await self.update_status(doc_id, DocumentStatus.SCORING_CLASSIFICATION)
             
             # Get active classifier prompt
-            active_prompt = self._get_active_prompt()
+            active_prompt = await self._get_active_prompt()
             
             # Call MCP tool for scoring
             document_info = {
-                "filename": document["filename"],
-                "extracted_text": document["extracted_text"],
-                "document_type": document["document_type"],
-                "confidence": document["classification_confidence"],
-                "reasoning": document["classification_reasoning"],
-                "secondary_tags": document["secondary_tags"]
+                "filename": document.get("filename", ""),
+                "extracted_text": document.get("extracted_text", ""),
+                "document_type": document.get("document_type", "unknown"),
+                "confidence": document.get("classification_confidence", 0.0),
+                "reasoning": document.get("classification_reasoning", ""),
+                "secondary_tags": document.get("secondary_tags", [])
             }
             
             loop = asyncio.get_event_loop()
@@ -184,32 +165,17 @@ class ClassifierScorerWorker(BaseWorker):
             await self.update_status(doc_id, DocumentStatus.FAILED, str(e))
             raise
     
-    def _get_active_prompt(self) -> dict:
+    async def _get_active_prompt(self) -> dict:
         """Get the active classifier prompt from database."""
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            result = conn.execute("""
-                SELECT id, prompt_text, version, performance_score, performance_metrics
-                FROM prompts
-                WHERE prompt_type = ? 
-                  AND document_type IS NULL
-                  AND is_active = true
-                ORDER BY version DESC
-                LIMIT 1
-            """, [PromptType.CLASSIFIER.value]).fetchone()
-            
-            if not result:
-                raise ValueError("No active classifier prompt found")
-            
-            return {
-                "id": result[0],
-                "prompt_text": result[1],
-                "version": result[2],
-                "performance_score": result[3],
-                "performance_metrics": json.loads(result[4]) if result[4] else {}
-            }
-        finally:
-            conn.close()
+        prompt = await self.db.get_active_prompt(PromptType.CLASSIFIER)
+        if not prompt:
+            raise ValueError("No active classifier prompt found")
+        
+        # Parse performance_metrics if it's a JSON string
+        if isinstance(prompt.get('performance_metrics'), str):
+            prompt['performance_metrics'] = json.loads(prompt['performance_metrics']) if prompt['performance_metrics'] else {}
+        
+        return prompt
     
     async def _should_update_prompt(self, active_prompt: dict, new_score: float) -> bool:
         """
@@ -260,55 +226,43 @@ class ClassifierScorerWorker(BaseWorker):
         )
         
         # Save new prompt version to database
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            # Deactivate old prompt
-            conn.execute("""
-                UPDATE prompts 
-                SET is_active = false 
-                WHERE id = ?
-            """, [active_prompt["id"]])
-            
-            # Insert new prompt
-            new_id = str(uuid4())
-            new_version = active_prompt["version"] + 1
-            
-            conn.execute("""
-                INSERT INTO prompts 
-                (id, prompt_type, document_type, prompt_text, version, 
-                 performance_score, performance_metrics, is_active, created_at, updated_at)
-                VALUES (?, ?, NULL, ?, ?, ?, ?, true, ?, ?)
-            """, [
-                new_id,
-                PromptType.CLASSIFIER.value,
-                new_prompt_text,
-                new_version,
-                score,
-                json.dumps({"evolution_feedback": feedback}),
-                datetime.utcnow(),
-                datetime.utcnow()
-            ])
-            
-            logger.info(
-                f"Evolved classifier prompt to version {new_version} "
-                f"(score: {score:.2f})"
-            )
-        finally:
-            conn.close()
+        # Deactivate old prompt
+        await self.db.deactivate_old_prompts(PromptType.CLASSIFIER, None)
+        
+        # Insert new prompt
+        from uuid import uuid4
+        new_version = active_prompt["version"] + 1
+        
+        await self.db.create_prompt(
+            prompt_id=uuid4(),
+            prompt_type=PromptType.CLASSIFIER,
+            document_type=None,
+            prompt_text=new_prompt_text,
+            version=new_version,
+            performance_score=score,
+            performance_metrics=json.dumps({"evolution_feedback": feedback})
+        )
+        
+        logger.info(
+            f"Evolved classifier prompt to version {new_version} "
+            f"(score: {score:.2f})"
+        )
 
 
 class SummarizerScorerWorker(BaseWorker):
     """Worker that scores summarizer performance and evolves prompts."""
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, db: AlfrdDatabase):
         """
         Initialize Summarizer Scorer worker.
         
         Args:
             settings: Application settings
+            db: Shared AlfrdDatabase instance
         """
         super().__init__(
             settings=settings,
+            db=db,
             worker_name="Summarizer Scorer Worker",
             source_status=DocumentStatus.SUMMARIZED,
             target_status=DocumentStatus.COMPLETED,
@@ -322,29 +276,14 @@ class SummarizerScorerWorker(BaseWorker):
     
     async def get_documents(self, status: DocumentStatus, limit: int) -> List[dict]:
         """Query database for documents in 'summarized' status."""
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            results = conn.execute("""
-                SELECT id, filename, extracted_text, document_type, structured_data
-                FROM documents
-                WHERE status = ?
-                ORDER BY created_at ASC
-                LIMIT ?
-            """, [status.value, limit]).fetchall()
-            
-            documents = []
-            for row in results:
-                documents.append({
-                    "id": row[0],
-                    "filename": row[1],
-                    "extracted_text": row[2],
-                    "document_type": row[3],
-                    "structured_data": json.loads(row[4]) if row[4] else {},
-                })
-            
-            return documents
-        finally:
-            conn.close()
+        documents = await self.db.get_documents_by_status(status, limit)
+        
+        # Parse structured_data from JSON string if needed
+        for doc in documents:
+            if isinstance(doc.get('structured_data'), str):
+                doc['structured_data'] = json.loads(doc['structured_data']) if doc['structured_data'] else {}
+        
+        return documents
     
     async def process_document(self, document: dict) -> bool:
         """
@@ -366,7 +305,7 @@ class SummarizerScorerWorker(BaseWorker):
             await self.update_status(doc_id, DocumentStatus.SCORING_SUMMARY)
             
             # Get active summarizer prompt for this document type
-            active_prompt = self._get_active_prompt(doc_type)
+            active_prompt = await self._get_active_prompt(doc_type)
             
             # Call MCP tool for scoring
             document_info = {
@@ -419,32 +358,17 @@ class SummarizerScorerWorker(BaseWorker):
             await self.update_status(doc_id, DocumentStatus.FAILED, str(e))
             raise
     
-    def _get_active_prompt(self, document_type: str) -> dict:
+    async def _get_active_prompt(self, document_type: str) -> dict:
         """Get the active summarizer prompt for a document type."""
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            result = conn.execute("""
-                SELECT id, prompt_text, version, performance_score, performance_metrics
-                FROM prompts
-                WHERE prompt_type = ? 
-                  AND document_type = ?
-                  AND is_active = true
-                ORDER BY version DESC
-                LIMIT 1
-            """, [PromptType.SUMMARIZER.value, document_type]).fetchone()
-            
-            if not result:
-                raise ValueError(f"No active summarizer prompt found for type: {document_type}")
-            
-            return {
-                "id": result[0],
-                "prompt_text": result[1],
-                "version": result[2],
-                "performance_score": result[3],
-                "performance_metrics": json.loads(result[4]) if result[4] else {}
-            }
-        finally:
-            conn.close()
+        prompt = await self.db.get_active_prompt(PromptType.SUMMARIZER, document_type)
+        if not prompt:
+            raise ValueError(f"No active summarizer prompt found for type: {document_type}")
+        
+        # Parse performance_metrics if it's a JSON string
+        if isinstance(prompt.get('performance_metrics'), str):
+            prompt['performance_metrics'] = json.loads(prompt['performance_metrics']) if prompt['performance_metrics'] else {}
+        
+        return prompt
     
     
     async def _should_update_prompt(self, active_prompt: dict, new_score: float) -> bool:
@@ -487,70 +411,49 @@ class SummarizerScorerWorker(BaseWorker):
         )
         
         # Save new prompt version
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            conn.execute("""
-                UPDATE prompts 
-                SET is_active = false 
-                WHERE id = ?
-            """, [active_prompt["id"]])
-            
-            new_id = str(uuid4())
-            new_version = active_prompt["version"] + 1
-            
-            conn.execute("""
-                INSERT INTO prompts 
-                (id, prompt_type, document_type, prompt_text, version, 
-                 performance_score, performance_metrics, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, true, ?, ?)
-            """, [
-                new_id,
-                PromptType.SUMMARIZER.value,
-                document_type,
-                new_prompt_text,
-                new_version,
-                score,
-                json.dumps({"evolution_feedback": feedback}),
-                datetime.utcnow(),
-                datetime.utcnow()
-            ])
-            
-            logger.info(
-                f"Evolved {document_type} summarizer prompt to version {new_version} "
-                f"(score: {score:.2f})"
-            )
-        finally:
-            conn.close()
+        # Deactivate old prompt
+        await self.db.deactivate_old_prompts(PromptType.SUMMARIZER, document_type)
+        
+        # Insert new prompt
+        from uuid import uuid4
+        new_version = active_prompt["version"] + 1
+        
+        await self.db.create_prompt(
+            prompt_id=uuid4(),
+            prompt_type=PromptType.SUMMARIZER,
+            document_type=document_type,
+            prompt_text=new_prompt_text,
+            version=new_version,
+            performance_score=score,
+            performance_metrics=json.dumps({"evolution_feedback": feedback})
+        )
+        
+        logger.info(
+            f"Evolved {document_type} summarizer prompt to version {new_version} "
+            f"(score: {score:.2f})"
+        )
     
     async def _cleanup_inbox_folder(self, doc_id: str):
         """Delete inbox folder after successful processing."""
         import shutil
         
-        conn = duckdb.connect(str(self.settings.database_path))
+        # Get original inbox folder path
+        doc = await self.db.get_document(doc_id)
+        if not doc or not doc.get('folder_path'):
+            return
+        
+        folder_path = Path(doc['folder_path'])
+        
+        # Only delete if it's in the inbox directory
         try:
-            # Get original inbox folder path
-            result = conn.execute(
-                "SELECT folder_path FROM documents WHERE id = ?",
-                [doc_id]
-            ).fetchone()
+            folder_path.relative_to(self.settings.inbox_path)
             
-            if not result or not result[0]:
-                return
-            
-            folder_path = Path(result[0])
-            
-            # Only delete if it's in the inbox directory
-            try:
-                folder_path.relative_to(self.settings.inbox_path)
-                
-                if folder_path.exists():
-                    shutil.rmtree(folder_path)
-                    logger.info(f"Cleaned up inbox folder: {folder_path.name}")
-            except ValueError:
-                # Path is not in inbox, don't delete
-                logger.debug(f"Folder {folder_path} not in inbox, skipping cleanup")
+            if folder_path.exists():
+                shutil.rmtree(folder_path)
+                logger.info(f"Cleaned up inbox folder: {folder_path.name}")
+        except ValueError:
+            # Path is not in inbox, don't delete
+            logger.debug(f"Folder {folder_path} not in inbox, skipping cleanup")
         except Exception as e:
             # Don't fail the whole process if cleanup fails
             logger.warning(f"Failed to cleanup inbox folder for {doc_id}: {e}")
-        finally:
-            conn.close()

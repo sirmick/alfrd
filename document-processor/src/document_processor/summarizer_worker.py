@@ -5,9 +5,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 import sys
-import duckdb
 import json
-from datetime import datetime
 
 # Add parent directories to path for standalone execution
 _script_dir = Path(__file__).parent.parent.parent.parent
@@ -16,6 +14,7 @@ sys.path.insert(0, str(_script_dir / "mcp-server" / "src"))  # MCP server source
 
 from shared.config import Settings
 from shared.types import DocumentStatus, PromptType
+from shared.database import AlfrdDatabase
 from document_processor.workers import BaseWorker
 
 # Import MCP tools
@@ -28,15 +27,17 @@ logger = logging.getLogger(__name__)
 class SummarizerWorker(BaseWorker):
     """Worker that summarizes documents using DB-stored type-specific prompts."""
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, db: AlfrdDatabase):
         """
         Initialize Summarizer worker.
         
         Args:
             settings: Application settings
+            db: Shared AlfrdDatabase instance
         """
         super().__init__(
             settings=settings,
+            db=db,
             worker_name="Summarizer Worker",
             source_status=DocumentStatus.SCORED_CLASSIFICATION,
             target_status=DocumentStatus.SUMMARIZED,
@@ -62,31 +63,7 @@ class SummarizerWorker(BaseWorker):
         Returns:
             List of document dictionaries
         """
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            results = conn.execute("""
-                SELECT id, filename, document_type, extracted_text, 
-                       extracted_text_path, folder_path
-                FROM documents
-                WHERE status = ?
-                ORDER BY created_at ASC
-                LIMIT ?
-            """, [status.value, limit]).fetchall()
-            
-            documents = []
-            for row in results:
-                documents.append({
-                    "id": row[0],
-                    "filename": row[1],
-                    "document_type": row[2],
-                    "extracted_text": row[3],
-                    "extracted_text_path": row[4],
-                    "folder_path": row[5],
-                })
-            
-            return documents
-        finally:
-            conn.close()
+        return await self.db.get_documents_by_status(status, limit)
     
     async def process_document(self, document: dict) -> bool:
         """
@@ -116,7 +93,7 @@ class SummarizerWorker(BaseWorker):
             
             # Get active summarizer prompt for this document type
             if doc_type not in self._prompts_cache:
-                self._prompts_cache[doc_type] = self._get_active_prompt(doc_type)
+                self._prompts_cache[doc_type] = await self._get_active_prompt(doc_type)
             
             active_prompt = self._prompts_cache[doc_type]
             
@@ -140,30 +117,19 @@ class SummarizerWorker(BaseWorker):
             summary_text = summary.get('summary', '')
             
             # Update database with both summary text and structured data
-            conn = duckdb.connect(str(self.settings.database_path))
-            try:
-                conn.execute("""
-                    UPDATE documents
-                    SET summary = ?,
-                        structured_data = ?,
-                        updated_at = ?
-                    WHERE id = ?
-                """, [
-                    summary_text,
-                    json.dumps(summary),
-                    datetime.utcnow(),
-                    doc_id
-                ])
-                
-                # Log with full one-line summary
-                summary_preview = summary_text if len(summary_text) <= 100 else f"{summary_text[:97]}..."
-                logger.info(
-                    f"Summarization complete for {doc_id}: "
-                    f"{len(summary)} fields extracted"
-                )
-                logger.info(f"  Summary: {summary_preview}")
-            finally:
-                conn.close()
+            await self.db.update_document(
+                doc_id=doc_id,
+                summary=summary_text,
+                structured_data=json.dumps(summary)
+            )
+            
+            # Log with full one-line summary
+            summary_preview = summary_text if len(summary_text) <= 100 else f"{summary_text[:97]}..."
+            logger.info(
+                f"Summarization complete for {doc_id}: "
+                f"{len(summary)} fields extracted"
+            )
+            logger.info(f"  Summary: {summary_preview}")
             
             # Update status to summarized
             await self.update_status(doc_id, DocumentStatus.SUMMARIZED)
@@ -175,49 +141,24 @@ class SummarizerWorker(BaseWorker):
             await self.update_status(doc_id, DocumentStatus.FAILED, str(e))
             raise
     
-    def _get_active_prompt(self, document_type: str) -> dict:
+    async def _get_active_prompt(self, document_type: str) -> dict:
         """Get the active summarizer prompt for a document type."""
-        conn = duckdb.connect(str(self.settings.database_path))
-        try:
-            result = conn.execute("""
-                SELECT id, prompt_text, version, performance_score
-                FROM prompts
-                WHERE prompt_type = ? 
-                  AND document_type = ?
-                  AND is_active = true
-                ORDER BY version DESC
-                LIMIT 1
-            """, [PromptType.SUMMARIZER.value, document_type]).fetchone()
+        prompt = await self.db.get_active_prompt(PromptType.SUMMARIZER, document_type)
+        
+        if not prompt:
+            # Try to get a generic summarizer prompt
+            logger.warning(
+                f"No specific prompt for type '{document_type}', "
+                f"using generic summarizer"
+            )
+            prompt = await self.db.get_active_prompt(PromptType.SUMMARIZER, 'generic')
             
-            if not result:
-                # Try to get a generic summarizer prompt
-                logger.warning(
-                    f"No specific prompt for type '{document_type}', "
-                    f"using generic summarizer"
+            if not prompt:
+                raise ValueError(
+                    f"No active summarizer prompt found for type: {document_type}"
                 )
-                result = conn.execute("""
-                    SELECT id, prompt_text, version, performance_score
-                    FROM prompts
-                    WHERE prompt_type = ? 
-                      AND document_type = 'generic'
-                      AND is_active = true
-                    ORDER BY version DESC
-                    LIMIT 1
-                """, [PromptType.SUMMARIZER.value]).fetchone()
-                
-                if not result:
-                    raise ValueError(
-                        f"No active summarizer prompt found for type: {document_type}"
-                    )
-            
-            return {
-                "id": result[0],
-                "prompt_text": result[1],
-                "version": result[2],
-                "performance_score": result[3]
-            }
-        finally:
-            conn.close()
+        
+        return prompt
     
     def _load_llm_json(self, document: dict) -> Optional[dict]:
         """Load the LLM-optimized JSON with block-level data if available."""

@@ -1,11 +1,43 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database (using Unix sockets for local dev)
+  postgres:
+    image: postgres:15-alpine
+    container_name: alfrd-postgres
+    environment:
+      POSTGRES_DB: alfrd
+      POSTGRES_USER: alfrd_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alfrd_dev_password}
+      POSTGRES_HOST_AUTH_METHOD: trust  # For Unix socket connections
+    ports:
+      - "5432:5432"  # Expose for external tools (pgAdmin, etc.)
+    volumes:
+      # Persistent data storage
+      - ../data/postgres:/var/lib/postgresql/data
+      # Initialize schema on first run
+      - ../api-server/src/api_server/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      # Unix socket directory (shared with alfrd container)
+      - postgres-socket:/var/run/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alfrd_user -d alfrd"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - alfrd-network
+
+  # ALFRD Application Container
   alfrd:
     build:
       context: ..
       dockerfile: docker/Dockerfile
     container_name: alfrd-dev
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "8000:8000"  # API Server
       - "5173:5173"  # Vite dev server (web UI)
@@ -19,6 +51,8 @@ services:
       - ../web-ui/public:/app/web-ui/public
       - ../shared:/app/shared
       - ../scripts:/app/scripts
+      # Shared PostgreSQL Unix socket
+      - postgres-socket:/var/run/postgresql
     environment:
       - ENV=development
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
@@ -26,6 +60,10 @@ services:
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - LOG_LEVEL=INFO
       - PYTHONUNBUFFERED=1
+      # PostgreSQL connection via Unix socket
+      - DATABASE_URL=postgresql://alfrd_user@/alfrd?host=/var/run/postgresql
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-alfrd_dev_password}
+      # Legacy paths (keeping for backward compatibility)
       - DATABASE_PATH=/data/alfrd.db
       - INBOX_PATH=/data/inbox
       - DOCUMENTS_PATH=/data/documents
@@ -41,3 +79,15 @@ services:
       start_period: 10s
     stdin_open: true
     tty: true
+    networks:
+      - alfrd-network
+
+# Named volumes for PostgreSQL socket sharing
+volumes:
+  postgres-socket:
+    driver: local
+
+# Network for inter-container communication
+networks:
+  alfrd-network:
+    driver: bridge

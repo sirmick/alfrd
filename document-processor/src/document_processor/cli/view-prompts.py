@@ -3,9 +3,9 @@
 
 import sys
 from pathlib import Path
-import duckdb
 import json
 from datetime import datetime
+import asyncio
 
 # Add project root to path (go up to esec/)
 _script_dir = Path(__file__).resolve()
@@ -13,6 +13,7 @@ _project_root = _script_dir.parent.parent.parent.parent.parent  # cli/ -> docume
 sys.path.insert(0, str(_project_root))
 
 from shared.config import Settings
+from shared.database import AlfrdDatabase
 
 
 def format_prompt_text(text: str, max_length: int = 80) -> str:
@@ -22,7 +23,7 @@ def format_prompt_text(text: str, max_length: int = 80) -> str:
     return text[:max_length] + "..."
 
 
-def view_prompts(prompt_type: str = None, show_inactive: bool = False, show_full: bool = False):
+async def view_prompts(prompt_type: str = None, show_inactive: bool = False, show_full: bool = False):
     """
     Display prompts from database.
     
@@ -32,40 +33,35 @@ def view_prompts(prompt_type: str = None, show_inactive: bool = False, show_full
         show_full: Show full prompt text without truncation
     """
     settings = Settings()
-    conn = duckdb.connect(str(settings.database_path))
+    db = AlfrdDatabase(
+        database_url=settings.database_url,
+        pool_min_size=1,
+        pool_max_size=3,
+        pool_timeout=30.0
+    )
+    await db.initialize()
     
     try:
-        # Build query
-        query = """
-            SELECT 
-                prompt_type,
-                document_type,
-                version,
-                performance_score,
-                is_active,
-                created_at,
-                updated_at,
-                prompt_text,
-                performance_metrics
-            FROM prompts
-        """
+        # Get all prompts
+        prompts = await db.list_prompts()
         
-        conditions = []
-        params = []
-        
+        # Filter by type if specified
         if prompt_type:
-            conditions.append("prompt_type = ?")
-            params.append(prompt_type)
+            prompts = [p for p in prompts if p['prompt_type'] == prompt_type]
         
+        # Filter by active status if specified
         if not show_inactive:
-            conditions.append("is_active = true")
+            prompts = [p for p in prompts if p['is_active']]
         
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        
-        query += " ORDER BY prompt_type, document_type NULLS FIRST, version DESC"
-        
-        results = conn.execute(query, params).fetchall()
+        # Sort by prompt_type, document_type, version DESC
+        results = sorted(
+            prompts,
+            key=lambda p: (
+                p['prompt_type'],
+                p['document_type'] or '',
+                -p['version']
+            )
+        )
         
         if not results:
             print("\n❌ No prompts found in database.")
@@ -79,8 +75,16 @@ def view_prompts(prompt_type: str = None, show_inactive: bool = False, show_full
         print("📝 PROMPT EVOLUTION HISTORY")
         print("=" * 100)
         
-        for row in results:
-            p_type, doc_type, version, score, active, created, updated, text, metrics = row
+        for prompt in results:
+            p_type = prompt['prompt_type']
+            doc_type = prompt.get('document_type')
+            version = prompt['version']
+            score = prompt.get('performance_score')
+            active = prompt['is_active']
+            created = prompt['created_at']
+            updated = prompt['updated_at']
+            text = prompt['prompt_text']
+            metrics = prompt.get('performance_metrics')
             
             # Group header
             group_key = (p_type, doc_type)
@@ -126,7 +130,7 @@ def view_prompts(prompt_type: str = None, show_inactive: bool = False, show_full
         print("\n" + "=" * 100)
         
         # Summary statistics
-        active_count = sum(1 for r in results if r[4])
+        active_count = sum(1 for p in results if p['is_active'])
         total_count = len(results)
         
         print(f"\n📊 Summary:")
@@ -142,7 +146,7 @@ def view_prompts(prompt_type: str = None, show_inactive: bool = False, show_full
         print()
         
     finally:
-        conn.close()
+        await db.close()
 
 
 def main():
@@ -182,13 +186,15 @@ Examples:
     args = parser.parse_args()
     
     try:
-        view_prompts(
+        asyncio.run(view_prompts(
             prompt_type=args.type,
             show_inactive=args.all,
             show_full=args.full
-        )
+        ))
     except Exception as e:
         print(f"\n❌ Error: {e}\n")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 

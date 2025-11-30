@@ -1,0 +1,94 @@
+#!/bin/bash
+# ALFRD - Simple Database Creation Script
+# Assumes local user already has psql access via Unix domain sockets
+# No /etc modifications required
+
+set -e
+
+echo "🐘 Creating ALFRD PostgreSQL Database"
+echo "======================================="
+echo ""
+
+# Get current user
+CURRENT_USER=$(whoami)
+echo "📝 Current user: $CURRENT_USER"
+echo ""
+
+# PostgreSQL defaults to connecting to a database named after the user
+# If that doesn't exist, we need to specify a different database to connect to
+# Usually 'postgres' or 'template1' exists
+
+# Try to connect to postgres database first (most common)
+DB_FOR_ADMIN="postgres"
+if ! psql -d "$DB_FOR_ADMIN" -c '\q' 2>/dev/null; then
+    # If postgres db doesn't exist, try template1
+    DB_FOR_ADMIN="template1"
+    if ! psql -d "$DB_FOR_ADMIN" -c '\q' 2>/dev/null; then
+        echo "❌ ERROR: Cannot connect to PostgreSQL"
+        echo ""
+        echo "Neither 'postgres' nor 'template1' database exists."
+        echo "Please create your user database first:"
+        echo "  sudo -u postgres createdb $CURRENT_USER"
+        echo ""
+        echo "Or connect as postgres user to create it:"
+        echo "  sudo -u postgres psql -c 'CREATE DATABASE $CURRENT_USER;'"
+        exit 1
+    fi
+fi
+
+echo "📡 Connected to PostgreSQL via: $DB_FOR_ADMIN database"
+echo ""
+
+# Check if database already exists
+if psql -d "$DB_FOR_ADMIN" -lqt | cut -d \| -f 1 | grep -qw alfrd; then
+    echo "⚠️  Database 'alfrd' already exists"
+    read -p "Do you want to drop and recreate it? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        echo "🗑️  Dropping existing database..."
+        psql -d "$DB_FOR_ADMIN" -c "DROP DATABASE IF EXISTS alfrd;"
+        echo "✓ Database dropped"
+    else
+        echo "Exiting without changes"
+        exit 0
+    fi
+fi
+
+echo "📦 Creating database 'alfrd'..."
+psql -d "$DB_FOR_ADMIN" <<EOF
+-- Create database owned by current user
+CREATE DATABASE alfrd OWNER $CURRENT_USER;
+EOF
+
+echo "✓ Database 'alfrd' created"
+echo ""
+
+# Now connect to alfrd and enable UUID extension
+echo "🔧 Enabling UUID extension..."
+psql -d alfrd <<EOF
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Verify setup
+SELECT version();
+EOF
+
+echo ""
+echo "✅ Database 'alfrd' created successfully!"
+echo ""
+echo "📋 Connection Details:"
+echo "   Database: alfrd"
+echo "   User: $CURRENT_USER"
+echo "   Socket: /var/run/postgresql (default)"
+echo ""
+echo "🔗 Connection String (for .env):"
+echo "   DATABASE_URL=postgresql://$CURRENT_USER@/alfrd?host=/var/run/postgresql"
+echo ""
+echo "🧪 Test Connection:"
+echo "   psql -d alfrd -c \"SELECT version();\""
+echo ""
+echo "📝 Next Steps:"
+echo "   1. Update .env with the DATABASE_URL above"
+echo "   2. Run: python scripts/init-db.py"
+echo "   3. Test: python document-processor/src/document_processor/main.py"
+echo ""

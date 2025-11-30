@@ -374,14 +374,16 @@ See `api-server/src/api_server/db/schema.sql` for complete schema.
 
 ## Statistics
 
-- **Lines of Code**: ~4,800+ lines (core + workers + scorers + MCP tools)
-- **Test Coverage**: 11/11 tests passing (storage + worker infrastructure)
+- **Lines of Code**: ~5,000+ lines (core + workers + scorers + MCP tools + API + Web UI)
+- **Test Coverage**: 14/14 tests passing (storage + worker infrastructure + pipeline integration)
 - **OCR Accuracy**: 95%+ with AWS Textract
 - **Processing Speed**: ~2-3 seconds per page
 - **Worker Architecture**: 5 workers (OCR, Classifier, ClassifierScorer, Summarizer, SummarizerScorer)
 - **MCP Integration**: Bedrock with Claude Sonnet 4 + Amazon Nova
 - **Prompt Evolution**: Automatic improvement based on performance feedback
-- **Document Types**: 5 default types + unlimited LLM-suggested types
+- **Document Types**: 6 default types (bill, finance, school, event, junk, generic) + unlimited LLM-suggested types
+- **API Endpoints**: 5 endpoints (health, documents list/detail/file, upload-image)
+- **Web UI**: Ionic React PWA with 3 pages (capture, documents, detail)
 
 ## Contributing
 
