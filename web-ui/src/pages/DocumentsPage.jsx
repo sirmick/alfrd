@@ -122,57 +122,54 @@ function DocumentsPage() {
         {!loading && !error && documents.length > 0 && (
           <IonList>
             {documents.map((doc) => (
-              <IonCard 
-                key={doc.id} 
-                button 
+              <IonCard
+                key={doc.id}
+                button
                 onClick={() => history.push(`/documents/${doc.id}`)}
                 style={{ margin: '10px' }}
               >
                 <IonCardHeader>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <IonCardTitle>
-                      <IonIcon icon={documentText} style={{ marginRight: '8px' }} />
-                      {doc.document_type || 'Unknown Type'}
-                    </IonCardTitle>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      {/* Main line: Summary and date */}
+                      <IonCardTitle style={{ fontSize: '1.1em', marginBottom: '4px' }}>
+                        {doc.summary || doc.document_type || 'Untitled Document'}
+                      </IonCardTitle>
+                      <p style={{ fontSize: '0.85em', color: '#666', margin: '0 0 8px 0' }}>
+                        {formatDate(doc.created_at)}
+                      </p>
+                    </div>
                     <IonBadge color={getStatusColor(doc.status)}>
                       {doc.status}
                     </IonBadge>
                   </div>
                 </IonCardHeader>
                 <IonCardContent>
-                  <p style={{ fontSize: '0.9em', color: '#666', marginBottom: '8px' }}>
-                    {formatDate(doc.created_at)}
-                  </p>
-                  
-                  {doc.summary && (
-                    <p style={{
-                      marginTop: '8px',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      display: '-webkit-box',
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: 'vertical',
-                      fontStyle: 'italic'
-                    }}>
-                      {doc.summary}
-                    </p>
-                  )}
-                  
-                  {doc.secondary_tags && doc.secondary_tags.length > 0 && (
-                    <div style={{ marginTop: '8px' }}>
-                      {doc.secondary_tags.map((tag, idx) => (
-                        <IonBadge key={idx} color="light" style={{ marginRight: '4px' }}>
+                  {/* Second line: Type and tags */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
+                    {/* Document type badge */}
+                    {doc.document_type && (
+                      <IonBadge color="primary" style={{ marginRight: '4px' }}>
+                        {doc.document_type}
+                      </IonBadge>
+                    )}
+                    
+                    {/* Secondary tags */}
+                    {doc.secondary_tags && doc.secondary_tags.length > 0 && (
+                      doc.secondary_tags.map((tag, idx) => (
+                        <IonBadge key={idx} color="secondary" style={{ marginRight: '4px' }}>
                           {tag}
                         </IonBadge>
-                      ))}
-                    </div>
-                  )}
-                  
-                  {doc.classification_confidence && (
-                    <p style={{ fontSize: '0.85em', color: '#999', marginTop: '8px' }}>
-                      Confidence: {Math.round(doc.classification_confidence * 100)}%
-                    </p>
-                  )}
+                      ))
+                    )}
+                    
+                    {/* Classification confidence */}
+                    {doc.classification_confidence && (
+                      <IonBadge color="light" style={{ marginLeft: 'auto' }}>
+                        {Math.round(doc.classification_confidence * 100)}%
+                      </IonBadge>
+                    )}
+                  </div>
                 </IonCardContent>
               </IonCard>
             ))}

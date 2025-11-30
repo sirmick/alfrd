@@ -239,11 +239,17 @@ async def list_documents(
             if doc.get('id'):
                 doc['id'] = str(doc['id'])
             
-            # Ensure secondary_tags is an array (not null or dict)
+            # Ensure secondary_tags is an array (parse JSON string if needed)
             if doc.get('secondary_tags') is None:
                 doc['secondary_tags'] = []
+            elif isinstance(doc.get('secondary_tags'), str):
+                # Parse JSON string (for compatibility with stored JSON)
+                try:
+                    doc['secondary_tags'] = json.loads(doc['secondary_tags'])
+                except (json.JSONDecodeError, TypeError):
+                    doc['secondary_tags'] = []
             elif not isinstance(doc.get('secondary_tags'), list):
-                # If it's a dict or other type, wrap it or convert it
+                # If it's a dict or other type, convert to empty array
                 doc['secondary_tags'] = []
             
             # Ensure structured_data is an object (not null)
@@ -296,6 +302,12 @@ async def get_document(document_id: str, database: AlfrdDatabase = Depends(get_d
         # Ensure JSONB fields are properly formatted
         if doc.get('secondary_tags') is None:
             doc['secondary_tags'] = []
+        elif isinstance(doc.get('secondary_tags'), str):
+            # Parse JSON string (for compatibility with stored JSON)
+            try:
+                doc['secondary_tags'] = json.loads(doc['secondary_tags'])
+            except (json.JSONDecodeError, TypeError):
+                doc['secondary_tags'] = []
         elif not isinstance(doc.get('secondary_tags'), list):
             doc['secondary_tags'] = []
         

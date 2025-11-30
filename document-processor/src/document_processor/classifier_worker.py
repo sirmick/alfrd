@@ -129,7 +129,7 @@ class ClassifierWorker(BaseWorker):
                 doc_id=doc_id,
                 document_type=classification["document_type"],
                 suggested_type=classification.get("suggested_type"),
-                secondary_tags=json.dumps(classification.get("secondary_tags", [])),
+                secondary_tags=json.dumps(classification.get("secondary_tags", [])),  # Convert to JSON string for JSONB
                 classification_confidence=classification["confidence"],
                 classification_reasoning=classification["reasoning"]
             )

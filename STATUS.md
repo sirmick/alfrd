@@ -43,11 +43,14 @@
    - 5 REST endpoints (health, documents list/detail/file, upload-image)
    - FastAPI with asyncio
    - OpenAPI documentation at `/docs`
+   - File serving with security checks
 
-7. **Ionic React PWA**
-   - 3 pages: CapturePage, DocumentsPage, DocumentDetailPage
-   - Basic structure ready
-   - Needs integration with API
+7. **Ionic React PWA (90% Complete)**
+   - ✅ **CapturePage** - Camera capture, photo preview, upload to API
+   - ✅ **DocumentsPage** - API integration, document list, manual refresh
+   - ✅ **DocumentDetailPage** - Full metadata, image preview, structured data
+   - ✅ **Upload workflow** - Camera → Base64 → FormData → API
+   - ⏳ **Auto-polling** - Missing automatic status updates (manual refresh works)
 
 8. **Docker Deployment**
    - Single-container with supervisord
@@ -64,21 +67,28 @@
 
 ## What's Pending ⏳
 
-### Phase 2B: PWA Integration (In Progress)
+### Phase 2B: PWA Integration (90% Complete)
 
-1. **Camera to API Upload Flow**
-   - ⏳ Test camera capture in PWA
-   - ⏳ Wire upload to `/api/v1/upload-image`
-   - ⏳ Handle upload progress/errors
+1. **Camera to API Upload Flow** ✅
+   - ✅ Camera capture with Capacitor API
+   - ✅ Upload to `/api/v1/upload-image` via FormData
+   - ✅ Error handling with toast notifications
+   - ✅ Photo preview before upload
+   - ✅ Redirect to documents list after success
 
-2. **Real-Time Status Updates**
-   - ⏳ Poll API for document status
-   - ⏳ Show pipeline progress in UI
-   - ⏳ Refresh document list after upload
+2. **Real-Time Status Updates** ⏳
+   - ✅ Manual refresh (pull-to-refresh + button)
+   - ✅ Status badges with color-coding
+   - ⏳ Automatic polling for status updates (missing)
+   - ⏳ WebSocket/SSE for real-time updates (optional)
 
-3. **End-to-End Testing**
-   - ⏳ Photo → Upload → Process → Classify → Summarize → View
-   - ⏳ Error handling and edge cases
+3. **End-to-End Testing** ⏳
+   - ✅ Photo capture working
+   - ✅ Upload to API working
+   - ✅ Document list display working
+   - ✅ Document detail view working
+   - ⏳ Full pipeline testing (upload → process → view)
+   - ⏳ Error handling edge cases
 
 ### Phase 3: Enhanced Features (Planned)
 
@@ -114,7 +124,7 @@
 - Worker Infrastructure: ~1,700 lines (5 workers + scorers)
 - MCP Server: ~400 lines (tools + Bedrock client)
 - API Server: ~452 lines
-- Web UI: ~100+ lines
+- Web UI: ~706 lines (3 fully functional pages)
 - Database Layer: ~674 lines (shared/database.py)
 - Tests: ~850 lines
 - Helper Scripts: ~750 lines
@@ -223,10 +233,10 @@ inbox/doc-folder/
 ## Next Steps (Priority Order)
 
 ### Immediate (Week 1-2)
-1. Complete PWA camera to API upload flow
-2. Add real-time document status polling in UI
-3. Test end-to-end mobile workflow
-4. Add error handling and loading states
+1. ✅ Complete PWA camera to API upload flow - DONE (90%)
+2. Add automatic polling for document status updates (last 10%)
+3. Test end-to-end mobile workflow (photo → process → view)
+4. UI polish and improvements
 5. Document search in PWA
 
 ### Short Term (Week 3-4)

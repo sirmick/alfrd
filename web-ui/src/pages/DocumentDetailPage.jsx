@@ -45,6 +45,27 @@ function DocumentDetailPage() {
       }
       
       const data = await response.json()
+      
+      // Parse structured_data if it's a string
+      if (data.structured_data && typeof data.structured_data === 'string') {
+        try {
+          data.structured_data = JSON.parse(data.structured_data)
+        } catch (e) {
+          console.error('Failed to parse structured_data:', e)
+          data.structured_data = {}
+        }
+      }
+      
+      // Parse secondary_tags if it's a string
+      if (data.secondary_tags && typeof data.secondary_tags === 'string') {
+        try {
+          data.secondary_tags = JSON.parse(data.secondary_tags)
+        } catch (e) {
+          console.error('Failed to parse secondary_tags:', e)
+          data.secondary_tags = []
+        }
+      }
+      
       setDocument(data)
     } catch (err) {
       console.error('Error fetching document:', err)

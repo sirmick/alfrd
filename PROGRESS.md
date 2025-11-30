@@ -144,12 +144,30 @@ data/documents/2024/11/
 10. **Test suite** - Pytest tests for storage module
 11. **Standalone execution** - All scripts work without PYTHONPATH setup
 
-### ✅ Phase 2A Partially Implemented
+### ✅ Phase 2A: PWA Integration - 90% Complete
 
-1. **API Server** - ✅ Implemented with 5 endpoints (health, status, documents list/detail/file, upload-image)
-2. **Web UI** - ✅ Basic Ionic React PWA with 3 pages (CapturePage, DocumentsPage, DocumentDetailPage)
-3. **Image upload** - ⏳ API endpoint exists, needs integration testing
-4. **Camera capture** - ⏳ UI structure ready, needs backend wiring
+1. **API Server** - ✅ Fully implemented with 5 endpoints (health, status, documents list/detail/file, upload-image)
+2. **Web UI** - ✅ Ionic React PWA with 3 fully functional pages
+   - **CapturePage** - ✅ Capacitor Camera API integrated, base64 capture, photo preview, upload to API
+   - **DocumentsPage** - ✅ Fetches from API, displays documents, manual refresh, status badges
+   - **DocumentDetailPage** - ✅ Full document details, image preview, OCR text, structured data
+3. **Image upload** - ✅ Complete workflow: camera → base64 → FormData → POST /upload-image
+4. **Camera capture** - ✅ Working with detailed logging and error handling
+5. **Upload API** - ✅ Creates inbox folder with meta.json, validates file types
+6. **Error handling** - ✅ Toast notifications and error cards in UI
+
+**What's working:**
+- Camera photo capture with Capacitor
+- Photo preview in UI
+- Upload to API server
+- Inbox folder creation
+- Document list with real API data
+- Document detail view with all metadata
+- Manual refresh (pull-to-refresh + button)
+
+**What's missing (10%):**
+- Automatic polling for status updates (documents must be manually refreshed)
+- WebSocket/SSE for real-time updates (optional enhancement)
 
 ### ✅ Phase 1B Complete
 

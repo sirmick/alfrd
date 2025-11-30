@@ -132,14 +132,22 @@ User adds document → Folder created in inbox (PENDING)
 - **Test suite** with pytest (11/11 tests passing)
 - **Standalone execution** (no PYTHONPATH setup needed)
 
-### ⏳ Phase 2 - Coming Soon
+### ✅ Phase 2A - PWA Integration (90% Complete)
 
-- PWA interface with camera capture
-- Image upload API endpoint
+- ✅ **PWA interface** - Ionic React with 3 functional pages
+- ✅ **Camera capture** - Capacitor Camera API integrated
+- ✅ **Image upload** - POST to /api/v1/upload-image endpoint
+- ✅ **Document list** - Real-time data from API with manual refresh
+- ✅ **Document detail** - Full metadata, OCR text, structured data display
+- ⏳ **Auto-polling** - Automatic status updates (currently manual refresh)
+
+### ⏳ Phase 3 - Coming Soon
+
 - Hierarchical summaries (weekly → monthly → yearly)
 - Financial tracking with CSV exports
 - Integration tests for full pipeline
 - Real-time file watching (watchdog)
+- Analytics dashboard
 
 ## Project Structure
 
@@ -331,11 +339,14 @@ No wrapper scripts or environment setup needed!
 - [x] Prompt versioning and performance tracking
 - [x] Default prompts initialization
 
-### Phase 2: PWA Interface (Next)
-- [ ] Ionic PWA with camera capture
-- [ ] Image upload API endpoint
-- [ ] Mobile photo workflow
-- [ ] Integration tests
+### Phase 2A: PWA Interface (90% Complete)
+- [x] Ionic PWA with camera capture
+- [x] Image upload API endpoint
+- [x] Mobile photo workflow (camera → upload → API)
+- [x] Document list page with API integration
+- [x] Document detail page with full metadata
+- [ ] Automatic status polling (manual refresh works)
+- [ ] End-to-end integration tests
 
 ### Phase 3: Analytics & UI
 - [ ] Hierarchical summaries
@@ -385,7 +396,10 @@ See `api-server/src/api_server/db/schema.sql` for complete schema.
 - **Prompt Evolution**: Automatic improvement based on performance feedback
 - **Document Types**: 6 default types (bill, finance, school, event, junk, generic) + unlimited LLM-suggested types
 - **API Endpoints**: 5 endpoints (health, documents list/detail/file, upload-image)
-- **Web UI**: Ionic React PWA with 3 pages (capture, documents, detail)
+- **Web UI**: Ionic React PWA with 3 fully functional pages (90% complete)
+  - **CapturePage** (166 lines) - Camera capture, photo preview, upload
+  - **DocumentsPage** (192 lines) - Document list with API integration
+  - **DocumentDetailPage** (348 lines) - Full document details and metadata
 
 ## Contributing
 
