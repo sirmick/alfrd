@@ -75,7 +75,7 @@ Each script:
 
 **CLI Tools** are Python scripts in `document-processor/src/document_processor/cli/`:
 - `add-document.py` - Create inbox folders with metadata
-- `init-db.py` - Initialize DuckDB database
+- `create-alfrd-db` - Initialize PostgreSQL database
 - `view-document.py` - Query and display documents
 
 **Service Scripts** launch the main application components:

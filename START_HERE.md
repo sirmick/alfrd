@@ -2,377 +2,510 @@
 
 **Automated Ledger & Filing Research Database**
 
-> **Current Status:** Phase 1C Complete + Phase 2A Partial ✅
+> **Current Status:** Phase 1C Complete (Self-Improving Pipeline) + PostgreSQL Migration ✅
 >
-> 5-worker self-improving pipeline + basic PWA interface with API server.
+> 5-worker self-improving pipeline with PostgreSQL database and Ionic React PWA interface.
 
-## Initial Setup
+## Table of Contents
 
-### 1. Prerequisites
-- Python 3.11+ installed
-- AWS credentials configured (for Textract OCR)
-- Virtual environment at `./venv` (if using venv)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Database Setup](#database-setup)
+- [Starting Services](#starting-services)
+- [Processing Documents](#processing-documents)
+- [Using the Web UI](#using-the-web-ui)
+- [Command Reference](#command-reference)
+- [Project Structure](#project-structure)
+- [Troubleshooting](#troubleshooting)
 
-### 2. Install Dependencies
+---
+
+## Prerequisites
+
+### Required Software
+
+- **Python 3.11+** - Core application runtime
+- **PostgreSQL 15+** - Production database with full-text search
+- **Node.js 18+** - Web UI development
+- **AWS Account** - For Textract OCR and Bedrock LLM services
+
+### AWS Services Required
+
+- **AWS Textract** - OCR text extraction ($1.50/1000 pages)
+- **AWS Bedrock** - LLM for classification/summarization
+  - Using `us.amazon.nova-lite-v1:0` inference profile
+
+---
+
+## Installation
+
+### 1. Clone Repository
 
 ```bash
-# Install all dependencies
-pip install -r requirements.txt
-
-# Optional: Install in development mode for faster iteration
-pip install -e ./document-processor
-pip install -e ./api-server
-pip install -e ./mcp-server
+git clone <repository-url>
+cd esec
 ```
 
-### 3. Configure Environment
+### 2. Install Python Dependencies
 
 ```bash
-# Copy the example environment file
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### 3. Install Web UI Dependencies
+
+```bash
+cd web-ui
+npm install
+cd ..
+```
+
+### 4. Configure Environment
+
+```bash
+# Copy example environment file
 cp .env.example .env
 
-# Edit .env and add your AWS credentials
+# Edit .env with your credentials
 nano .env  # or use your preferred editor
 ```
 
-**Required settings in .env:**
+**Required settings in `.env`:**
+
 ```bash
-# AWS Credentials (for Textract OCR)
+# AWS Credentials (for Textract OCR and Bedrock LLM)
 AWS_ACCESS_KEY_ID=your-access-key
 AWS_SECRET_ACCESS_KEY=your-secret-key
 AWS_REGION=us-east-1
 
-# Optional (already set for local development)
-DATABASE_PATH=./data/alfrd.db
+# PostgreSQL Database (local development)
+DATABASE_URL=postgresql://alfrd_user@/alfrd?host=/var/run/postgresql
+POSTGRES_PASSWORD=alfrd_dev_password
+
+# Optional: Customize paths
 INBOX_PATH=./data/inbox
 DOCUMENTS_PATH=./data/documents
 SUMMARIES_PATH=./data/summaries
 ```
 
-### 4. Initialize Database
+---
 
-**IMPORTANT: You must initialize the database before first use!**
+## Database Setup
 
-```bash
-# This creates the ./data directory and DuckDB database with schema
-python3 scripts/init-db.py
-```
+### Option 1: Native PostgreSQL (Recommended for Development)
 
-Expected output:
-```
-Initializing database at ./data/alfrd.db
-✓ Database initialized successfully at ./data/alfrd.db
-  Tables created: documents, summaries, processing_events, analytics
-```
-
-## Document Processing Workflow
-
-### Adding Documents
-
-Use the `add-document.py` script to add documents to the inbox:
+**Install PostgreSQL:**
 
 ```bash
-# Single image with default settings
-python scripts/add-document.py ~/Downloads/bill.jpg
+# macOS (Homebrew)
+brew install postgresql@15
+brew services start postgresql@15
 
-# Multiple images (multi-page document)
-python scripts/add-document.py page1.jpg page2.jpg page3.jpg
+# Ubuntu/Debian
+sudo apt install postgresql-15
+sudo systemctl start postgresql
 
-# With custom tags and source
-python scripts/add-document.py bill.jpg --tags bill utilities electric --source mobile
-
-# Text files also supported
-python scripts/add-document.py receipt.txt --tags receipt --source email
+# Arch Linux
+sudo pacman -S postgresql
+sudo systemctl start postgresql
 ```
 
-**Document Folder Structure:**
+**Create Database:**
 
-The script creates folders in `data/inbox/` with this structure:
+```bash
+# Create user and database
+./scripts/create-alfrd-db
+
+# Or manually:
+createuser -s alfrd_user
+createdb -O alfrd_user alfrd
+```
+
+**Initialize Schema:**
+
+```bash
+# Run schema initialization
+psql -U alfrd_user -d alfrd -f api-server/src/api_server/db/schema.sql
+```
+
+### Option 2: Docker (Complete Isolated Environment)
+
+```bash
+# Start PostgreSQL and ALFRD services
+docker-compose -f docker/docker-compose.yml up -d
+
+# Database is automatically initialized via schema.sql
+```
+
+**Docker includes:**
+- PostgreSQL 15 with persistent storage
+- Automatic schema initialization
+- Unix socket connection for performance
+- Health checks for service readiness
+
+---
+
+## Starting Services
+
+### Development Mode (Native)
+
+Run each service in a separate terminal:
+
+```bash
+# Terminal 1: API Server (port 8000)
+./scripts/start-api
+
+# Terminal 2: Document Processor Workers
+./scripts/start-processor
+
+# Terminal 3: Web UI (port 3000)
+./scripts/start-webui
+```
+
+### Docker Mode
+
+```bash
+# Start all services
+docker-compose -f docker/docker-compose.yml up
+
+# Or in detached mode
+docker-compose -f docker/docker-compose.yml up -d
+
+# View logs
+docker-compose -f docker/docker-compose.yml logs -f alfrd
+```
+
+**Services:**
+- API Server: http://localhost:8000
+- Web UI: http://localhost:5173 (Vite dev server)
+- PostgreSQL: localhost:5432
+
+---
+
+## Processing Documents
+
+### 1. Add a Document
+
+```bash
+# Single image
+./scripts/add-document ~/Downloads/bill.jpg --tags bill utilities
+
+# Multiple pages (processed as one document)
+./scripts/add-document page1.jpg page2.jpg --tags invoice
+
+# With custom source
+./scripts/add-document receipt.jpg --tags receipt --source mobile
+```
+
+**This creates:**
 ```
 data/inbox/
-└── bill_20241125_120000/
+└── bill_20241130_140000/
     ├── meta.json          # Metadata with document list
-    ├── bill.jpg           # Your document(s)
-    └── page2.jpg          # Additional pages (if any)
+    └── bill.jpg           # Your document
 ```
 
-### Processing Documents
+### 2. Process Documents
 
-Run the document processor to extract text and store documents:
+The document processor runs a 5-worker pipeline:
 
 ```bash
-# Standalone execution (no PYTHONPATH setup needed!)
-python3 document-processor/src/document_processor/main.py
-
-# Or use the convenience script
-./scripts/process-documents.sh
+# Run processor (processes all inbox documents)
+./scripts/start-processor
 ```
 
-**What it does:**
-1. Scans `data/inbox/` for document folders
-2. Reads `meta.json` from each folder
-3. Runs AWS Textract OCR on images
-4. Extracts text from text files
-5. Combines into LLM-optimized format with blocks
-6. Stores in database and filesystem
-7. Moves processed folders to `data/processed/`
+**Pipeline stages:**
+1. **OCRWorker** - AWS Textract OCR extraction
+2. **ClassifierWorker** - Document type classification (bill/finance/junk/etc)
+3. **ClassifierScorerWorker** - Evaluate and improve classifier prompt
+4. **SummarizerWorker** - Generate type-specific summary
+5. **SummarizerScorerWorker** - Evaluate and improve summarizer prompts
 
-**Output:**
+### 3. View Results
+
+```bash
+# List all documents
+./scripts/view-document
+
+# View specific document
+./scripts/view-document <doc-id>
+
+# View with statistics
+./scripts/view-document --stats
+
+# View prompt evolution
+./scripts/view-prompts
+```
+
+**Output structure:**
 ```
 data/documents/2024/11/
-├── raw/{doc-id}/          # Original folder copy
+├── raw/{doc-id}/              # Original folder copy
 ├── text/
-│   ├── {doc-id}.txt       # Combined full text
-│   └── {doc-id}_llm.json  # LLM-formatted with blocks
-└── meta/{doc-id}.json     # Detailed metadata
+│   ├── {doc-id}.txt          # Full extracted text
+│   └── {doc-id}_llm.json     # LLM-formatted with blocks
+└── meta/{doc-id}.json         # Processing metadata
 ```
 
-### Complete Example
+---
+
+## Using the Web UI
+
+### Features
+
+- **📸 Camera Capture** - Take photos of documents
+- **📋 Document List** - View all processed documents
+- **🔍 Document Details** - See OCR text, summaries, and classifications
+- **📊 Status Tracking** - Real-time processing status
+
+### Workflow
+
+1. **Start Web UI**: `./scripts/start-webui`
+2. **Navigate to**: http://localhost:3000
+3. **Capture or Upload**: Use camera or file upload
+4. **Monitor**: Watch document process through pipeline
+5. **Review**: View extracted data and summaries
+
+---
+
+## Command Reference
+
+### Database Commands
 
 ```bash
-# 1. Initialize database (first time only)
-python3 scripts/init-db.py
+# Initialize database (PostgreSQL)
+./scripts/create-alfrd-db
 
-# 2. Add a document
-python scripts/add-document.py samples/pg\&e-bill.jpg --tags bill utilities
-
-# 3. Process documents
-python3 document-processor/src/document_processor/main.py
-
-# 4. Check results
-ls -la data/processed/     # Processed folders
-ls -la data/documents/     # Stored documents
+# Reset database (DELETES ALL DATA!)
+psql -U alfrd_user -d alfrd -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+psql -U alfrd_user -d alfrd -f api-server/src/api_server/db/schema.sql
 ```
 
-## Running Services
-
-### API Server
+### Document Management
 
 ```bash
-# Run directly (standalone)
-python3 api-server/src/api_server/main.py
+# Add document
+./scripts/add-document <files...> [--tags tag1 tag2] [--source mobile]
 
-# Check health
-curl http://localhost:8000/api/v1/health
+# View documents
+./scripts/view-document              # List all
+./scripts/view-document <doc-id>     # View specific
+./scripts/view-document --stats      # Show statistics
+./scripts/view-document --list       # List recent
 ```
 
-### MCP Server
+### Service Management
 
 ```bash
-# Run directly (standalone)
-python3 mcp-server/src/mcp_server/main.py
+# Start services individually
+./scripts/start-api         # API Server (port 8000)
+./scripts/start-processor   # Document processor workers
+./scripts/start-webui       # Web UI (port 3000)
+
+# Test API
+./scripts/test-api          # Run API tests
+
+# View logs (Docker)
+docker-compose -f docker/docker-compose.yml logs -f
 ```
 
-### Document Processor (Watcher Mode)
+### Prompt Management
 
 ```bash
-# Run watcher for continuous monitoring (not yet fully implemented)
-python3 document-processor/src/document_processor/watcher.py
+# View all prompts with history
+./scripts/view-prompts
 
-# Or use batch mode (process once and exit)
-python3 document-processor/src/document_processor/main.py
+# View classifier prompts only
+./scripts/view-prompts --type classifier
+
+# View summarizer prompts only
+./scripts/view-prompts --type summarizer
+
+# Include archived versions
+./scripts/view-prompts --archived
 ```
 
-## Testing
-
-### Run Unit Tests
+### Testing
 
 ```bash
-# Install pytest
-pip install pytest pytest-asyncio
-
-# Run storage tests
-pytest document-processor/tests/test_storage.py -v
-
 # Run all tests
 pytest -v
+
+# Run database tests
+pytest shared/tests/test_database.py -v
+
+# Test complete pipeline
+./samples/test-pipeline.sh
 ```
 
-### Test OCR Extraction
-
-```bash
-# Test AWS Textract with block display
-python samples/test_ocr.py samples/pg\&e-bill.jpg
-```
+---
 
 ## Project Structure
 
 ```
-alfrd/
-├── shared/                    # Shared configuration and types
-├── document-processor/        # Document ingestion and OCR
-│   ├── src/document_processor/
-│   │   ├── main.py           # Batch processor (STANDALONE)
-│   │   ├── watcher.py        # File watcher
-│   │   ├── detector.py       # File type detection
-│   │   ├── storage.py        # Database and filesystem storage
-│   │   └── extractors/
-│   │       ├── aws_textract.py  # AWS Textract OCR
-│   │       └── text.py          # Plain text extraction
+esec/
+├── api-server/              # FastAPI REST API
+│   ├── src/api_server/
+│   │   ├── main.py         # API server entry point
+│   │   └── db/schema.sql   # PostgreSQL schema
 │   └── tests/
-├── api-server/               # REST API and orchestration
-├── mcp-server/               # AI/LLM integration
-├── scripts/
-│   ├── init-db.py           # Database initialization (REQUIRED!)
-│   ├── add-document.py      # Add documents to inbox
-│   └── process-documents.sh # Process documents wrapper
+├── document-processor/      # Document processing workers
+│   ├── src/document_processor/
+│   │   ├── main.py         # Worker orchestrator
+│   │   ├── workers.py      # Base worker classes
+│   │   ├── ocr_worker.py   # AWS Textract OCR
+│   │   ├── classifier_worker.py      # Classification
+│   │   ├── summarizer_worker.py      # Summarization
+│   │   ├── scorer_workers.py         # Prompt evolution
+│   │   └── extractors/
+│   │       └── aws_textract.py       # Textract integration
+│   └── tests/
+├── mcp-server/              # LLM integration tools
+│   └── src/mcp_server/
+│       ├── tools/           # MCP tool implementations
+│       └── llm/bedrock.py   # AWS Bedrock client
+├── web-ui/                  # Ionic React PWA
+│   ├── src/
+│   │   ├── pages/          # UI pages
+│   │   └── App.jsx         # Main app component
+│   └── public/
+├── shared/                  # Shared utilities
+│   ├── config.py           # Configuration
+│   ├── database.py         # PostgreSQL client
+│   ├── constants.py        # Shared constants
+│   └── types.py            # Type definitions
+├── scripts/                 # CLI utilities
+│   ├── add-document        # Add documents to inbox
+│   ├── view-document       # View processed documents
+│   ├── view-prompts        # View prompt evolution
+│   ├── start-api           # Start API server
+│   ├── start-processor     # Start workers
+│   └── start-webui         # Start web UI
+├── docker/                  # Docker configuration
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   └── supervisord.conf
 └── data/                    # Runtime data (not in git)
-    ├── inbox/              # Document folders (input)
-    ├── processed/          # Processed folders (archived)
-    ├── documents/          # Stored documents (output)
-    └── alfrd.db            # DuckDB database
+    ├── inbox/              # Document input folders
+    ├── documents/          # Processed documents
+    ├── summaries/          # Generated summaries
+    └── postgres/           # PostgreSQL data (Docker)
 ```
-
-## Key Features
-
-### Folder-Based Document Input
-
-Documents are organized in folders with `meta.json`:
-
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "created_at": "2024-11-25T02:00:00Z",
-  "documents": [
-    {"file": "bill.jpg", "type": "image", "order": 1},
-    {"file": "page2.jpg", "type": "image", "order": 2}
-  ],
-  "metadata": {
-    "source": "mobile",
-    "tags": ["bill", "utilities"]
-  }
-}
-```
-
-### LLM-Optimized Output
-
-The processor creates structured output perfect for LLM consumption:
-
-```json
-{
-  "full_text": "--- Document: bill.jpg ---\n[text]\n\n--- Document: page2.jpg ---\n[text]",
-  "blocks_by_document": [
-    {
-      "file": "bill.jpg",
-      "blocks": {
-        "PAGE": [...],
-        "LINE": [...],
-        "WORD": [...]
-      }
-    }
-  ],
-  "document_count": 2,
-  "total_chars": 1234,
-  "avg_confidence": 0.95
-}
-```
-
-### Standalone Execution
-
-All main scripts have built-in PYTHONPATH setup - no wrapper scripts needed:
-
-```python
-# At top of file
-_script_dir = Path(__file__).parent.parent.parent.parent
-sys.path.insert(0, str(_script_dir))  # Project root
-sys.path.insert(0, str(Path(__file__).parent.parent))  # src directory
-```
-
-## Common Issues
-
-### Database not initialized
-
-```bash
-# Error: Table 'documents' does not exist
-# Solution: Initialize database
-python3 scripts/init-db.py
-```
-
-### AWS credentials not configured
-
-```bash
-# Error: AWS authentication failed
-# Solution: Set up AWS credentials in .env
-AWS_ACCESS_KEY_ID=your-key
-AWS_SECRET_ACCESS_KEY=your-secret
-AWS_REGION=us-east-1
-```
-
-### Import errors
-
-```bash
-# If you see ModuleNotFoundError
-# The scripts should work standalone, but if not:
-pip install -e ./document-processor
-pip install -e ./api-server
-pip install -e ./mcp-server
-```
-
-## Available Commands
-
-### Core Commands
-
-```bash
-# Initialize database (required once, DELETES ALL DATA!)
-./scripts/init-db
-
-# Add a document
-./scripts/add-document <path-to-file> [--tags tag1 tag2] [--source mobile]
-
-# Process documents (5-worker self-improving pipeline)
-python3 document-processor/src/document_processor/main.py
-# Or process once and exit:
-python3 document-processor/src/document_processor/main.py --once
-
-# View documents
-./scripts/view-document <doc-id>    # Show specific document
-./scripts/view-document --list      # List recent documents
-./scripts/view-document --stats     # Show statistics
-
-# View prompt evolution
-./scripts/view-prompts                    # All prompts with history
-./scripts/view-prompts --type classifier  # Only classifier prompts
-./scripts/view-prompts --type summarizer  # Only summarizer prompts
-./scripts/view-prompts --archived         # Include archived versions
-
-# Test complete pipeline
-./samples/test-pipeline.sh          # End-to-end test with sample document
-```
-
-### API Server Commands
-
-```bash
-# Start API server (implements 5 endpoints)
-python3 api-server/src/api_server/main.py
-# Or use script:
-./scripts/start-api
-
-# Test API endpoints
-curl http://localhost:8000/api/v1/health
-curl http://localhost:8000/api/v1/documents
-curl http://localhost:8000/api/v1/documents/{doc-id}
-```
-
-### Development Commands
-
-```bash
-# Run all tests (14/14 passing)
-pytest document-processor/tests/ -v
-
-# Test OCR extraction
-python samples/test_ocr.py samples/pg\&e-bill.jpg
-
-# Start web UI (Ionic React PWA)
-cd web-ui && npm run dev
-```
-
-## Next Steps
-
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for detailed system design.
-See [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) for development roadmap.
-See [`PROGRESS.md`](PROGRESS.md) for current status.
-See [`CONTINUE_HERE.md`](CONTINUE_HERE.md) for latest development status.
 
 ---
 
-**🚀 Ready to process your documents with AI!**
+## Troubleshooting
+
+### PostgreSQL Connection Issues
+
+**Error:** `could not connect to server`
+
+```bash
+# Check PostgreSQL is running
+pg_isready -h /var/run/postgresql
+
+# Start PostgreSQL service
+brew services start postgresql@15  # macOS
+sudo systemctl start postgresql    # Linux
+```
+
+**Error:** `role "alfrd_user" does not exist`
+
+```bash
+# Create user and database
+./scripts/create-alfrd-db
+```
+
+### AWS Credentials Not Configured
+
+**Error:** `AWS authentication failed`
+
+```bash
+# Set up AWS credentials in .env
+AWS_ACCESS_KEY_ID=your-key
+AWS_SECRET_ACCESS_KEY=your-secret
+AWS_REGION=us-east-1
+
+# Or use AWS CLI
+aws configure
+```
+
+### Import Errors
+
+**Error:** `ModuleNotFoundError`
+
+```bash
+# Activate virtual environment
+source venv/bin/activate
+
+# Reinstall dependencies
+pip install -r requirements.txt
+```
+
+### Port Already in Use
+
+**Error:** `Address already in use (port 8000)`
+
+```bash
+# Find and kill process using port
+lsof -ti:8000 | xargs kill -9
+
+# Or use different port
+API_PORT=8001 ./scripts/start-api
+```
+
+### Database Schema Out of Date
+
+```bash
+# Re-initialize schema (DELETES ALL DATA!)
+psql -U alfrd_user -d alfrd -f api-server/src/api_server/db/schema.sql
+```
+
+---
+
+## Key Features
+
+### Self-Improving Prompts ✨
+
+- Classifier prompt evolves based on accuracy (max 300 words)
+- Summarizer prompts (per type) evolve based on quality
+- LLM can suggest new document types
+- Performance metrics tracked for each prompt version
+
+### Document Processing Pipeline
+
+```
+User uploads → OCR → Classify → Score → Summarize → Score → Complete
+                ↓       ↓         ↓         ↓         ↓         ↓
+            Textract  Bedrock  Analyze   Bedrock   Analyze  Database
+```
+
+### Supported Document Types
+
+- **bill** - Utility bills, invoices, statements
+- **finance** - Bank statements, credit card statements
+- **school** - Educational documents
+- **event** - Event tickets, confirmations
+- **junk** - Spam, promotional materials
+- **generic** - Catch-all for other documents
+
+LLM can suggest additional types dynamically!
+
+---
+
+## Next Steps
+
+- **See [`ARCHITECTURE.md`](ARCHITECTURE.md)** - System design and architecture
+- **See [`PROGRESS.md`](PROGRESS.md)** - Current development status
+- **See [`DOCUMENT_PROCESSING_DESIGN.md`](DOCUMENT_PROCESSING_DESIGN.md)** - Worker pipeline details
+
+---
+
+**🚀 Ready to process documents with AI-powered OCR and classification!**
+
+**Last Updated:** 2025-11-30 (PostgreSQL Migration Complete)

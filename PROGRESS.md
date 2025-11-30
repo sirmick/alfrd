@@ -1,8 +1,8 @@
 # ALFRD - Development Progress
 
-**Last Updated:** 2025-11-26 (Status Audit Complete)
+**Last Updated:** 2025-11-30 (PostgreSQL Migration Complete)
 
-## Current Phase: Phase 1C Complete + Phase 2A Partial ✅
+## Current Phase: Phase 1C Complete + PostgreSQL Migration ✅
 
 ### Pipeline Testing & Validation - COMPLETED
 
@@ -136,7 +136,7 @@ data/documents/2024/11/
 2. **AWS Textract OCR** - Extracts text with confidence scores and bounding boxes
 3. **Block-level data** - Preserves PAGE, LINE, WORD blocks for LLM consumption
 4. **Multi-document folders** - Processes multiple images/text files as single document
-5. **Database storage** - Stores in DuckDB with full metadata
+5. **Database storage** - Stores in PostgreSQL with full metadata
 6. **Filesystem organization** - Year/month directory structure
 7. **LLM-optimized format** - Combined text + blocks by document
 8. **Logging** - Comprehensive logging with timestamps
@@ -222,26 +222,25 @@ python samples/test_ocr.py samples/pg\&e-bill.jpg
 
 ## Statistics
 
-**Lines of Code (Phase 1C Complete + Phase 2A Partial):**
+**Lines of Code (PostgreSQL Migration Complete):**
 - Document Processor Core: ~800 lines (main.py, storage.py, detector.py, extractors)
 - Worker Infrastructure: ~418 lines (workers.py, ocr_worker.py)
 - Classifier Worker: ~237 lines (classifier_worker.py - DB-driven)
 - Scorer Workers: ~556 lines (scorer_workers.py - Using MCP tools)
 - Summarizer Worker: ~263 lines (summarizer_worker.py)
-- Workflow Worker: ~340 lines (workflow_worker.py - DEPRECATED, kept for reference)
 - MCP Server: ~400 lines (bedrock.py, classify_dynamic.py, score_performance.py, summarize_dynamic.py)
 - API Server: ~452 lines (main.py with 5 endpoints)
 - Web UI: ~100+ lines (App.jsx + 3 pages)
-- Tests: ~657 lines (test_storage.py, test_workers.py, test_pipeline_integration.py)
-- Helper Scripts: ~750 lines (add-document, init-db, view-document, view-prompts, test-pipeline)
-- Database Schema: ~190 lines (schema.sql with prompts, document_types, classification_suggestions)
-- **Total: ~5,200+ lines**
+- Database Layer: ~674 lines (shared/database.py - PostgreSQL with asyncpg)
+- Tests: ~850 lines (test_database.py with 20 PostgreSQL tests)
+- Helper Scripts: ~750 lines (add-document, create-alfrd-db, view-document, view-prompts)
+- Database Schema: ~246 lines (PostgreSQL schema.sql)
+- **Total: ~5,700+ lines**
 
 **Test Coverage:**
-- Storage module: 100% (5/5 tests passing)
-- Worker infrastructure: 100% (6/6 tests passing)
-- Pipeline integration: 100% (3/3 tests passing)
-- **Total: 14/14 tests passing** ✅
+- Database module: 100% (20/20 tests passing)
+- PostgreSQL integration: Full CRUD + prompts + search
+- **Total: 20/20 tests passing** ✅
 
 ## Next Steps
 
@@ -277,19 +276,21 @@ python samples/test_ocr.py samples/pg\&e-bill.jpg
 
 ## Known Issues & Notes
 
-1. **Database must be initialized** - Users must run `./scripts/init-db` before first use (DELETES ALL DATA)
-2. **API server not fully functional** - Basic endpoints only, event processing not implemented
-3. **Watcher mode stub** - Only batch mode with `--once` flag works currently
+1. **PostgreSQL Required** - PostgreSQL 15+ must be installed and running
+2. **Database must be initialized** - Users must run `./scripts/create-alfrd-db` before first use
+3. **Unix Socket Connection** - Development uses Unix sockets for performance (Docker uses TCP)
 4. **Minimum scoring threshold** - Set to 1 for testing; production should use 5+
 5. **MCP Architecture Rule** - Document processors must ONLY call MCP tools, never LLM directly
 
 ## Technical Decisions
 
-### Why Folder-Based Structure?
-- Supports multi-page documents naturally
-- Metadata travels with documents
-- Easy to add/edit documents manually
-- Mobile apps can upload folders easily
+### Why PostgreSQL?
+- Production-ready with proven scalability
+- Full-text search with GIN indexes
+- JSONB for flexible structured data
+- Connection pooling with asyncpg
+- Better multi-user support
+- Native triggers for auto-updating fields
 
 ### Why AWS Textract?
 - Production-quality OCR (95%+ accuracy)
@@ -297,25 +298,34 @@ python samples/test_ocr.py samples/pg\&e-bill.jpg
 - Table/form extraction support
 - Cost-effective ($1.50/1000 pages)
 
-### Why LLM-Optimized Format?
-- Preserves structure for better understanding
-- Confidence scores help filter low-quality text
-- Bounding boxes enable spatial reasoning
-- Combined format reduces LLM API calls
+### Why Unix Socket Connections?
+- Faster than TCP for local development
+- Lower latency for database operations
+- More secure (no network exposure)
+- Docker shares socket via volume mount
 
 ## Architecture Notes
 
-- **Standalone execution** - All main scripts set up their own PYTHONPATH
-- **Test isolation** - Tests use temporary databases and directories
-- **No pip install needed** - Scripts work directly from source
-- **Graceful degradation** - Processor handles missing files/errors
-- **Comprehensive logging** - Easy debugging with timestamps
-- **Worker pool architecture** - State-machine-driven parallel document processing
-- **MCP tools as libraries** - Imported directly by workers, not separate server process
-- **⚠️ MCP Architecture Rule** - Workers must ONLY call MCP tools, never BedrockClient directly
-  - This ensures consistent prompt management, versioning, and observability
-  - Makes future transition to standalone MCP server seamless
-  - Example: Use [`score_summarization()`](mcp-server/src/mcp_server/tools/score_performance.py) not `bedrock_client.invoke_model()`
+### PostgreSQL Migration (2025-11-30)
+- **asyncpg Connection Pooling** - Efficient async database access
+- **Full-Text Search** - GIN indexes on TSVECTOR for fast search
+- **JSONB Storage** - Flexible structured data with indexing
+- **Auto-Updating Triggers** - Timestamps and search vectors
+- **Unix Socket Connections** - High performance for local dev
+- **Test Database Isolation** - Separate `alfrd_test` database
+
+### Worker Architecture
+- **State-machine-driven** - All state in PostgreSQL, not memory
+- **Parallel processing** - Configurable concurrency per worker
+- **Crash-resistant** - Workers resume from database state
+- **Observable** - Query database to see pipeline status
+
+### MCP Integration
+- **MCP tools as libraries** - Imported directly by workers
+- **⚠️ Architecture Rule** - Workers ONLY call MCP tools, never BedrockClient directly
+  - Ensures consistent prompt management and versioning
+  - Makes future MCP server transition seamless
+  - Example: Use `score_summarization()` not `bedrock_client.invoke_model()`
 
 ## Phase 1C Implementation Details
 
@@ -355,4 +365,32 @@ python samples/test_ocr.py samples/pg\&e-bill.jpg
 
 ---
 
-**Status:** Phase 1C complete! Self-improving prompt architecture fully functional. System learns from feedback and evolves prompts automatically. Next: Testing and validation, then PWA interface for mobile photo capture.
+---
+
+## PostgreSQL Migration Details (2025-11-30)
+
+### Changes Made
+1. **Database Engine** - PostgreSQL 15 with asyncpg
+2. **Connection Method** - asyncpg connection pooling (5-20 connections)
+3. **Schema Updates** - JSONB for JSON fields, TSVECTOR for full-text search
+4. **Triggers** - Auto-update `updated_at` and `extracted_text_tsv`
+5. **Test Database** - Separate `alfrd_test` database for tests
+
+### Migration Benefits
+- ✅ Production-ready scalability
+- ✅ Better concurrent access
+- ✅ Faster full-text search (GIN indexes)
+- ✅ JSONB indexing for structured queries
+- ✅ Connection pooling for efficiency
+
+### Files Changed
+- `shared/config.py` - Added PostgreSQL connection settings
+- `shared/database.py` - Complete rewrite with asyncpg
+- `api-server/src/api_server/db/schema.sql` - PostgreSQL syntax
+- `shared/tests/test_database.py` - 20 comprehensive tests
+- `scripts/create-alfrd-db` - PostgreSQL database creation
+- Documentation updated across all markdown files
+
+---
+
+**Status:** Phase 1C complete + PostgreSQL migration complete! Self-improving prompt architecture with production-ready database. Next: Complete PWA integration for mobile photo capture.

@@ -1,17 +1,17 @@
-# ALFRD Document Processing Architecture Design
+# ALFRD Document Processing Architecture
 
-**Status:** ✅ Phase 1C Complete - Self-Improving Prompts | 🚧 Phase 2A Partial - PWA Interface
+**Status:** ✅ Phase 1C Complete + PostgreSQL Migration (2025-11-30)
 
 ---
 
 ## Executive Summary
 
 ALFRD uses a **state-machine-driven parallel worker architecture** where:
-- Documents flow through multiple processing stages (OCR → Classification → Workflow)
-- Each stage is handled by specialized workers polling the database
+- Documents flow through 5 processing stages with status transitions
+- Each stage handled by specialized workers polling PostgreSQL
 - Workers process documents in parallel with configurable concurrency
-- All state is tracked in DuckDB for observability and crash recovery
-- MCP server provides LLM abstraction for classification and extraction
+- All state tracked in database for observability and crash recovery
+- MCP tools provide LLM abstraction for classification and summarization
 
 ---
 
@@ -24,20 +24,21 @@ ALFRD uses a **state-machine-driven parallel worker architecture** where:
 │                                                                   │
 │  User adds folder → Inbox Scanner → INSERT status='pending'      │
 │                                                                   │
-│  ┌──────────────┐         ┌──────────────┐        ┌───────────┐│
-│  │  OCR Worker  │────────→│ Classifier   │───────→│ Workflow  ││
-│  │              │         │ Worker       │        │ Worker    ││
-│  │ Textract OCR │         │ MCP classify │        │Type-based ││
-│  │              │         │              │        │handlers   ││
-│  └──────────────┘         └──────────────┘        └───────────┘│
-│       ↓                        ↓                       ↓         │
-│  ocr_completed            classified              completed      │
+│  ┌──────────────┐   ┌──────────────┐   ┌────────────────────┐  │
+│  │  OCR Worker  │──→│ Classifier   │──→│ ClassifierScorer   │  │
+│  │ (Textract)   │   │ (Bedrock)    │   │ (Prompt Evolution) │  │
+│  └──────────────┘   └──────────────┘   └────────────────────┘  │
+│                                                                   │
+│  ┌──────────────┐   ┌──────────────┐                            │
+│  │ Summarizer   │──→│SummarizerScorer                          │
+│  │(Type-Specific│   │(Prompt Evolution)                         │
+│  └──────────────┘   └──────────────┘                            │
 │                                                                   │
 │                    Database-Driven State Machine                 │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ Status Flow:                                               │ │
-│  │ pending → ocr_started → ocr_completed →                    │ │
-│  │ classifying → classified → processing → completed          │ │
+│  │ pending → ocr_completed → classified →                     │ │
+│  │ scored_classification → summarized → completed             │ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                                                                   │
 └─────────────────────────────────────────────────────────────────┘
@@ -49,27 +50,26 @@ ALFRD uses a **state-machine-driven parallel worker architecture** where:
 
 ### 1. Database-Driven State Machine
 
-**All state lives in DuckDB, not in-memory:**
+**All state lives in PostgreSQL, not in-memory:**
 
 ```sql
--- Document status progression tracked in DB
-status VARCHAR CHECK (status IN (
-    'pending',           -- Document folder detected
-    'ocr_started',       -- AWS Textract called
-    'ocr_completed',     -- Text extracted
-    'classifying',       -- MCP classification in progress
-    'classified',        -- Type determined (junk/bill/finance)
-    'processing',        -- Type-specific handler processing
-    'completed',         -- All processing done
-    'failed'            -- Error at any stage
+status VARCHAR NOT NULL CHECK (status IN (
+    'pending',              -- Document folder detected
+    'ocr_completed',        -- Text extracted
+    'classified',           -- Type determined
+    'scored_classification',-- Classifier scored
+    'summarized',           -- Type-specific summary
+    'completed',            -- All processing done
+    'failed'                -- Error at any stage
 ))
 ```
 
 **Benefits:**
-- ✅ Workers can crash and resume from DB state
+- ✅ Workers can crash and resume from PostgreSQL state
 - ✅ No in-memory queues that lose data on restart
-- ✅ Observable: `SELECT * FROM documents WHERE status='classifying'`
-- ✅ Backpressure: Workers only fetch what they can process
+- ✅ Observable: `SELECT status, COUNT(*) FROM documents GROUP BY status`
+- ✅ Horizontal scaling: Run multiple worker instances
+- ✅ Connection pooling: asyncpg manages 5-20 connections efficiently
 
 ### 2. Parallel Worker Pools
 
@@ -79,24 +79,26 @@ Each processing stage has a dedicated worker pool:
 |--------|-------------|---------------|-----------|-------------|
 | **OCRWorker** | `pending` | `ocr_completed` | AWS Textract | 3 workers |
 | **ClassifierWorker** | `ocr_completed` | `classified` | AWS Bedrock | 5 workers |
-| **WorkflowWorker** | `classified` | `completed` | (none) | 3 workers |
+| **ClassifierScorerWorker** | `classified` | `scored_classification` | AWS Bedrock | 2 workers |
+| **SummarizerWorker** | `scored_classification` | `summarized` | AWS Bedrock | 5 workers |
+| **SummarizerScorerWorker** | `summarized` | `completed` | AWS Bedrock | 2 workers |
 
-**Configuration:** `shared/config.py`
+**Configuration:** [`shared/config.py`](shared/config.py)
 ```python
 # Worker concurrency (tune per cloud API limits)
 ocr_workers: int = 3              # AWS Textract TPS
 classifier_workers: int = 5        # Bedrock requests/minute
-workflow_workers: int = 3          # CPU-bound processing
+scorer_workers: int = 2            # Lower for scoring tasks
 
 # Poll intervals
 ocr_poll_interval: int = 5         # seconds
 classifier_poll_interval: int = 2  # seconds
-workflow_poll_interval: int = 5    # seconds
+scorer_poll_interval: int = 10     # seconds
 ```
 
 ### 3. Worker Base Class Pattern
 
-All workers extend `BaseWorker`:
+All workers extend [`BaseWorker`](document-processor/src/document_processor/workers.py):
 
 ```python
 class BaseWorker(ABC):
@@ -105,32 +107,20 @@ class BaseWorker(ABC):
     async def run(self):
         """Main loop: poll DB, process batch, repeat."""
         while self.running:
-            # Get documents in source_status
             docs = await self.get_documents(
                 status=self.source_status,
                 limit=self.concurrency * batch_multiplier
             )
             
-            # Process in parallel
             tasks = [self.process_document(doc) for doc in docs[:concurrency]]
             await asyncio.gather(*tasks)
             
             await asyncio.sleep(self.poll_interval)
-    
-    @abstractmethod
-    async def get_documents(self, status, limit) -> List[dict]:
-        """Query DB for documents to process."""
-        pass
-    
-    @abstractmethod
-    async def process_document(self, document: dict) -> bool:
-        """Process single document (worker-specific logic)."""
-        pass
 ```
 
 **Key Features:**
 - Configurable concurrency per worker type
-- Automatic batch sizing (concurrency × multiplier)
+- Automatic batch sizing
 - Graceful shutdown
 - Error handling with status updates
 
@@ -138,7 +128,7 @@ class BaseWorker(ABC):
 
 ## Worker Implementations
 
-### OCRWorker (✅ Implemented)
+### OCRWorker ✅
 
 **Purpose:** Extract text from images/PDFs using AWS Textract
 
@@ -150,94 +140,92 @@ class BaseWorker(ABC):
 5. Save to filesystem and update DB
 6. Set `status='ocr_completed'`
 
-**Key Code:**
-```python
-class OCRWorker(BaseWorker):
-    def __init__(self, settings):
-        super().__init__(
-            source_status=DocumentStatus.PENDING,
-            target_status=DocumentStatus.OCR_COMPLETED,
-            concurrency=settings.ocr_workers,
-            poll_interval=settings.ocr_poll_interval,
-        )
-    
-    async def process_document(self, doc):
-        # AWS Textract OCR
-        # Save extracted_text to DB
-        # Update status to ocr_completed
-```
-
 **Output:**
 - `{doc_id}.txt` - Full extracted text
 - `{doc_id}_llm.json` - LLM-optimized format with blocks
 - DB field: `extracted_text` (for classification)
 
-### ClassifierWorker (✅ Implemented)
+See: [`document-processor/src/document_processor/ocr_worker.py`](document-processor/src/document_processor/ocr_worker.py)
 
-**Purpose:** Classify documents as junk/bill/finance using MCP + Bedrock
+### ClassifierWorker ✅
+
+**Purpose:** Classify documents using DB-stored prompts + AWS Bedrock
 
 **Flow:**
 1. Poll DB for `status='ocr_completed'` documents
-2. Read `extracted_text` from DB
-3. Call MCP server: `classify_document(text, filename)`
-4. MCP invokes Bedrock with classification prompt
+2. Fetch active classifier prompt from `prompts` table
+3. Call MCP tool: `classify_dynamic(text, filename, prompt)`
+4. Accept LLM suggestions for NEW document types
 5. Update DB with `document_type`, `confidence`, `reasoning`
-6. Set `status='classified'`
+6. Record suggestions in `classification_suggestions` table
+7. Set `status='classified'`
 
 **MCP Integration:**
 ```python
-from mcp_server.tools.classify_document import classify_document
-from mcp_server.llm.bedrock import BedrockClient
-
-bedrock = BedrockClient()
-result = classify_document(extracted_text, filename, bedrock)
-
-# Update DB
-UPDATE documents SET
-    document_type = result.document_type,      # junk/bill/finance
-    classification_confidence = result.confidence,
-    classification_reasoning = result.reasoning,
-    status = 'classified'
-WHERE id = doc_id
+from mcp_server.tools.classify_dynamic import classify_dynamic
+result = classify_dynamic(extracted_text, filename, prompt_text, bedrock)
 ```
 
-**Why MCP?**
-- Abstraction: Swap LLM providers (Bedrock → Claude → local)
-- Reusable: Same tools work in Claude Desktop
-- Testable: Mock MCP server for tests
-- Flexible: Easy to change prompts/models
+**Why MCP?** Abstraction layer for LLM provider, reusable tools, testable
 
-### WorkflowWorker (⚠️ DEPRECATED - Replaced by SummarizerWorker + Scorer Workers)
+See: [`document-processor/src/document_processor/classifier_worker.py`](document-processor/src/document_processor/classifier_worker.py)
 
-**Purpose:** Route classified documents to type-specific handlers
+### ClassifierScorerWorker ✅
+
+**Purpose:** Evaluate classification performance and evolve prompt
 
 **Flow:**
 1. Poll DB for `status='classified'` documents
-2. Route by `document_type`:
-   - **junk** → Mark `status='completed'` (no processing)
-   - **bill** → `BillHandler` (extract vendor, amount, due date)
-   - **finance** → `FinanceHandler` (extract account, amounts, dates)
-3. Update summaries/reports
-4. Set `status='completed'`
+2. Wait for min 5 documents since last score
+3. Call MCP tool: `score_classification(doc, prompt_version)`
+4. Analyze accuracy, confidence, reasoning quality
+5. If score > current + 0.05 → create new prompt version
+6. Mark prompt as active, archive old version
+7. Set `status='scored_classification'`
 
-**Type-Specific Handlers:**
-```python
-class WorkflowWorker(BaseWorker):
-    async def process_document(self, doc):
-        if doc['document_type'] == 'bill':
-            await self.handle_bill(doc)
-        elif doc['document_type'] == 'finance':
-            await self.handle_finance(doc)
-        else:  # junk
-            await self.mark_completed(doc)
+**Prompt Evolution:**
+- Max 300 words for classifier prompt
+- Tracks performance score (0-1)
+- Creates new version only if significant improvement
 
-class BillHandler:
-    async def process(self, doc):
-        # Call MCP: extract_bill_data(text)
-        # Get: vendor, amount, due_date, account_number
-        # Append to monthly bill summary
-        # Update DB structured_data
-```
+See: [`document-processor/src/document_processor/scorer_workers.py`](document-processor/src/document_processor/scorer_workers.py)
+
+### SummarizerWorker ✅
+
+**Purpose:** Generate type-specific summaries using DB prompts
+
+**Flow:**
+1. Poll DB for `status='scored_classification'` documents
+2. Fetch active summarizer prompt for document type
+3. Call MCP tool: `summarize_dynamic(text, type, prompt)`
+4. Extract structured data (vendor, amount, dates, etc.)
+5. Update DB `structured_data` field
+6. Set `status='summarized'`
+
+**Generic Architecture:**
+- No hardcoded handlers
+- All prompt-driven from database
+- Works for any document type
+
+See: [`document-processor/src/document_processor/summarizer_worker.py`](document-processor/src/document_processor/summarizer_worker.py)
+
+### SummarizerScorerWorker ✅
+
+**Purpose:** Evaluate summarization quality and evolve prompts
+
+**Flow:**
+1. Poll DB for `status='summarized'` documents
+2. Wait for min 5 documents per type since last score
+3. Call MCP tool: `score_summarization(doc, summary, prompt_version)`
+4. Analyze extraction completeness, accuracy, usefulness
+5. If score > current + 0.05 → create new prompt version
+6. Set `status='completed'`
+
+**Per-Type Evolution:**
+- Each document type has its own summarizer prompt
+- Prompts evolve independently based on type-specific performance
+
+See: [`document-processor/src/document_processor/scorer_workers.py`](document-processor/src/document_processor/scorer_workers.py)
 
 ---
 
@@ -245,32 +233,35 @@ class BillHandler:
 
 ### Main Entry Point
 
-`document-processor/src/document_processor/main.py` (to be updated):
+[`document-processor/src/document_processor/main.py`](document-processor/src/document_processor/main.py):
 
 ```python
 async def main():
     """Run all worker pools concurrently."""
     settings = Settings()
     
-    # Initialize workers
-    ocr_worker = OCRWorker(settings)
-    classifier_worker = ClassifierWorker(settings)
-    workflow_worker = WorkflowWorker(settings)
+    # Initialize 5 workers
+    workers = [
+        OCRWorker(settings),
+        ClassifierWorker(settings),
+        ClassifierScorerWorker(settings),
+        SummarizerWorker(settings),
+        SummarizerScorerWorker(settings)
+    ]
     
     # Create pool
     pool = WorkerPool()
-    pool.add_worker(ocr_worker)
-    pool.add_worker(classifier_worker)
-    pool.add_worker(workflow_worker)
+    for worker in workers:
+        pool.add_worker(worker)
     
     # Run until Ctrl+C
     await pool.start()
 ```
 
 **Deployment:**
-- Development: `python main.py` (runs all workers)
-- Production: Supervisord manages worker processes
-- Scaling: Increase worker concurrency per cloud limits
+- Development: `./scripts/start-processor` (runs all workers)
+- Production: Supervisord manages worker process
+- Scaling: Increase worker concurrency in config
 
 ---
 
@@ -279,35 +270,36 @@ async def main():
 **User uploads 2-page PG&E bill:**
 
 ```
-1. User runs: python scripts/add-document.py page1.jpg page2.jpg --tags bill
-   → Creates: data/inbox/bill_20241125_120000/
-      ├── meta.json
-      ├── page1.jpg
-      └── page2.jpg
+1. Add document: ./scripts/add-document page1.jpg page2.jpg --tags bill
+   → Creates: data/inbox/bill_20241130_140000/
    → Inserts DB: status='pending'
 
-2. OCRWorker (3 workers polling every 5s)
-   → Fetches: SELECT * FROM documents WHERE status='pending' LIMIT 6
-   → Processes page1.jpg + page2.jpg with AWS Textract
-   → Combines: "PG&E Energy Statement\n[full text from both pages]"
+2. OCRWorker (3 workers, poll every 5s)
+   → Processes with AWS Textract
    → Saves: {doc_id}.txt, {doc_id}_llm.json
-   → Updates DB: status='ocr_completed', extracted_text='...'
+   → Updates: status='ocr_completed'
 
-3. ClassifierWorker (5 workers polling every 2s)
-   → Fetches: SELECT * FROM documents WHERE status='ocr_completed' LIMIT 10
-   → Calls MCP: classify_document(text="PG&E Energy Statement...", filename="bill...")
-   → MCP → Bedrock: "This is a utility bill..."
-   → Updates DB: document_type='bill', status='classified'
+3. ClassifierWorker (5 workers, poll every 2s)
+   → Uses DB prompt: "Classify this document..."
+   → Calls Bedrock: "This is a utility bill..."
+   → Updates: document_type='bill', status='classified'
 
-4. WorkflowWorker (3 workers polling every 5s)
-   → Fetches: SELECT * FROM documents WHERE status='classified' LIMIT 6
-   → Routes to BillHandler (document_type='bill')
-   → Calls MCP: extract_bill_data(text)
-   → Gets: {vendor: "PG&E", amount: 125.43, due_date: "2024-12-15"}
-   → Appends to: data/summaries/monthly/2024-11-bills.md
-   → Updates DB: structured_data={...}, status='completed'
+4. ClassifierScorerWorker (2 workers, poll every 10s)
+   → Evaluates classification accuracy
+   → If improved: Creates prompt v2
+   → Updates: status='scored_classification'
 
-5. Done! Document fully processed and searchable.
+5. SummarizerWorker (5 workers, poll every 2s)
+   → Uses bill-specific prompt
+   → Extracts: vendor, amount, due_date
+   → Updates: structured_data={...}, status='summarized'
+
+6. SummarizerScorerWorker (2 workers, poll every 10s)
+   → Evaluates extraction quality
+   → If improved: Creates bill prompt v2
+   → Updates: status='completed'
+
+Done! Document fully processed and searchable.
 ```
 
 ---
@@ -335,7 +327,7 @@ ocr_workers: int = 10
 classifier_workers: int = 20
 worker_batch_multiplier: int = 3  # Fetch 3× concurrency
 
-# Conservative (low cloud limits or cost-sensitive)
+# Conservative (low limits or cost-sensitive)
 ocr_workers: int = 2
 classifier_workers: int = 3
 worker_batch_multiplier: int = 1
@@ -343,12 +335,12 @@ worker_batch_multiplier: int = 1
 
 ---
 
-## Observability & Debugging
+## Observability
 
 ### Query Pipeline Status
 
 ```sql
--- See documents stuck in each stage
+-- See documents in each stage
 SELECT status, COUNT(*) 
 FROM documents 
 GROUP BY status;
@@ -358,12 +350,6 @@ SELECT id, filename, error_message
 FROM documents
 WHERE status = 'failed'
 ORDER BY updated_at DESC;
-
--- Processing time analysis
-SELECT 
-    AVG(EXTRACT(EPOCH FROM (processed_at - created_at))) as avg_seconds
-FROM documents
-WHERE status = 'completed';
 ```
 
 ### Logs
@@ -375,55 +361,9 @@ Each worker logs:
 - Status transitions
 
 ```
-2024-11-24 18:54:48 - INFO - OCR Worker found 2 documents, processing 2 in parallel
-2024-11-24 18:54:51 - INFO - Extracted 1154 characters from pg&e-bill.jpg with 99.63% confidence
-2024-11-24 18:54:51 - INFO - Updated document 73ef... status to ocr_completed
+2024-11-30 08:54:48 - INFO - OCR Worker found 2 documents, processing 2 in parallel
+2024-11-30 08:54:51 - INFO - Extracted 1154 chars with 98.47% confidence
 ```
-
----
-
-## Testing Strategy
-
-### Unit Tests (6/6 passing)
-
-`document-processor/tests/test_workers.py`:
-- `test_base_worker_initialization`
-- `test_worker_processes_documents` (parallel processing)
-- `test_worker_handles_empty_queue`
-- `test_worker_pool_manages_multiple_workers`
-- `test_worker_respects_batch_multiplier`
-- `test_worker_stops_gracefully`
-
-### Integration Tests (⏳ To Add)
-
-`document-processor/tests/test_pipeline_integration.py`:
-1. Insert document with `status='pending'`
-2. Run OCRWorker.process_document()
-3. Verify `status='ocr_completed'` and text extracted
-4. Run ClassifierWorker.process_document()
-5. Verify `status='classified'` and `document_type` set
-6. Run WorkflowWorker.process_document()
-7. Verify `status='completed'` and summary updated
-
----
-
-## Future Enhancements
-
-### Phase 2: Advanced Features
-
-1. **Retry Logic** - Exponential backoff for transient failures
-2. **Priority Queue** - Process urgent documents first
-3. **Batch OCR** - Send multiple images to Textract in single API call
-4. **Worker Health Monitoring** - Detect stuck workers
-5. **Metrics/Dashboard** - Grafana visualization of pipeline
-6. **Multi-Tenancy** - Isolate users with `WHERE user_id = ?`
-
-### Phase 3: Scaling
-
-1. **Horizontal Scaling** - Run workers on multiple machines
-2. **Distributed Queue** - Redis for cross-machine coordination
-3. **Worker Specialization** - OCR-only nodes, classifier-only nodes
-4. **Auto-scaling** - Scale workers based on queue depth
 
 ---
 
@@ -432,46 +372,54 @@ Each worker logs:
 ```
 document-processor/
 ├── src/document_processor/
-│   ├── workers.py              # BaseWorker, WorkerPool (216 lines)
-│   ├── ocr_worker.py           # OCRWorker implementation (202 lines)
-│   ├── classifier_worker.py    # ⏳ To implement
-│   ├── workflow_worker.py      # ⏳ To implement
-│   ├── main.py                 # Entry point (to update)
-│   ├── storage.py              # DB operations
-│   ├── detector.py             # File type detection
+│   ├── main.py                 # 5-worker orchestrator
+│   ├── workers.py              # BaseWorker, WorkerPool
+│   ├── ocr_worker.py           # AWS Textract
+│   ├── classifier_worker.py    # DB-driven classification
+│   ├── summarizer_worker.py    # Generic summarization
+│   ├── scorer_workers.py       # Prompt evolution
 │   └── extractors/
-│       ├── aws_textract.py     # AWS Textract integration
+│       ├── aws_textract.py     # Textract integration
 │       └── text.py             # Plain text extraction
-├── tests/
-│   ├── test_workers.py         # Worker tests (6/6 passing)
-│   ├── test_storage.py         # Storage tests (5/5 passing)
-│   └── test_pipeline_integration.py  # ⏳ To add
 ```
+
+**PostgreSQL Layer:** [`shared/database.py`](shared/database.py) (674 lines)
+- asyncpg connection pooling
+- All CRUD operations
+- Prompt management
+- Full-text search
+
+---
+
+## Testing
+
+**Database Tests:** [`shared/tests/test_database.py`](shared/tests/test_database.py)
+- 20/20 tests passing
+- PostgreSQL CRUD operations
+- Prompt management
+- Full-text search
+
+**Pipeline Test:** [`samples/test-pipeline.sh`](samples/test-pipeline.sh)
+- End-to-end test with PG&E bill sample
+- Verifies all 5 workers
+- Checks prompt evolution
+- Results: ✅ 98.47% OCR confidence, ✅ 95% classification confidence
 
 ---
 
 ## Summary
 
-**Current Architecture:** State-machine-driven parallel worker pools
+**Current Status:** 5-worker self-improving pipeline complete ✅
 
 **Key Benefits:**
 - ✅ DB-driven (crash-resistant)
 - ✅ Parallel processing (configurable concurrency)
 - ✅ Observable (query DB for status)
 - ✅ Modular (workers are independent)
-- ✅ Testable (6/6 tests passing)
-
-**Completed:**
-1. ✅ OCRWorker with AWS Textract
-2. ✅ ClassifierWorker with MCP (DB-driven prompts)
-3. ✅ ClassifierScorerWorker (evaluates and evolves classifier prompt)
-4. ✅ SummarizerWorker (generic DB-driven, replaces WorkflowWorker)
-5. ✅ SummarizerScorerWorker (evaluates and evolves summarizer prompts)
-6. ✅ Main.py orchestrator running 5-worker self-improving pipeline
-7. ✅ Integration tests (14/14 tests passing)
+- ✅ Self-improving (prompts evolve automatically)
 
 **Next Steps:**
-1. Complete PWA camera to API upload integration
+1. Complete PWA camera to API integration
 2. Add real-time status updates in UI
 3. Test end-to-end mobile workflow
 
@@ -479,5 +427,4 @@ This design scales from a single laptop to distributed cloud deployment while ma
 
 ---
 
-**Last Updated:** 2025-11-26
-**Status:** Phase 1C Complete - Self-Improving Pipeline | Phase 2A Partial - PWA Interface
+**Last Updated:** 2025-11-30

@@ -10,15 +10,15 @@
 - **Process folders** with multiple documents (multi-page bills, receipts, etc.)
 - **Classify via MCP** using LLM-powered document type detection (AWS Bedrock)
 - **Extract structured data** (vendor, amount, due date, line items) from bills automatically
-- **Store in DuckDB** with full-text search capability
+- **Store in PostgreSQL** with full-text search capability
 - **Preserve for LLMs** with combined text + block-level structure for spatial reasoning
 
 ## Quick Start
 
 ### Prerequisites
 - Python 3.11+
-- AWS credentials (for Textract OCR)
-- DuckDB (installed via pip)
+- PostgreSQL 15+
+- AWS credentials (for Textract OCR and Bedrock LLM)
 
 ### Installation
 
@@ -35,7 +35,7 @@ cp .env.example .env
 # Edit .env and add AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
 
 # Initialize database (REQUIRED!)
-python3 scripts/init-db.py
+./scripts/create-alfrd-db
 ```
 
 ### Process Your First Document
@@ -126,7 +126,7 @@ User adds document → Folder created in inbox (PENDING)
 - **Folder-based document input** with `meta.json` metadata
 - **Block-level data preservation** (PAGE, LINE, WORD with bounding boxes)
 - **Multi-document folders** (process multiple images as single document)
-- **DuckDB storage** with full-text search and structured data
+- **PostgreSQL storage** with full-text search and structured data
 - **LLM-optimized format** for AI processing with spatial reasoning
 - **Comprehensive logging** with timestamps
 - **Test suite** with pytest (11/11 tests passing)
@@ -156,15 +156,15 @@ alfrd/
 ├── api-server/               # REST API (basic health endpoints)
 ├── mcp-server/               # AI/LLM integration (stub)
 ├── scripts/
-│   ├── init-db.py           # Database initialization (REQUIRED!)
-│   ├── add-document.py      # Add documents to inbox
-│   └── process-documents.sh # Process documents wrapper
+│   ├── create-alfrd-db      # Database initialization (REQUIRED!)
+│   ├── add-document         # Add documents to inbox
+│   └── start-processor      # Process documents wrapper
 ├── shared/                   # Shared configuration and types
 └── data/                    # Runtime data (not in git)
     ├── inbox/              # Document folders (input)
     ├── processed/          # Processed folders (archived)
     ├── documents/          # Stored documents (output)
-    └── alfrd.db            # DuckDB database
+    └── postgres/           # PostgreSQL data (Docker)
 ```
 
 ## Usage Examples
@@ -241,7 +241,8 @@ AWS_SECRET_ACCESS_KEY=your-secret-key
 AWS_REGION=us-east-1
 
 # Paths (Optional - defaults for local development)
-DATABASE_PATH=./data/alfrd.db
+DATABASE_URL=postgresql://alfrd_user@/alfrd?host=/var/run/postgresql
+POSTGRES_PASSWORD=alfrd_dev_password
 INBOX_PATH=./data/inbox
 DOCUMENTS_PATH=./data/documents
 SUMMARIES_PATH=./data/summaries
@@ -256,9 +257,9 @@ ENV=development
 ### Database not initialized
 
 ```bash
-# Error: Table 'documents' does not exist
+# Error: relation "documents" does not exist
 # Solution: Initialize database
-python3 scripts/init-db.py
+./scripts/create-alfrd-db
 ```
 
 ### AWS credentials not configured
@@ -305,7 +306,7 @@ No wrapper scripts or environment setup needed!
 - [x] Folder-based document input
 - [x] AWS Textract OCR
 - [x] LLM-optimized output format
-- [x] DuckDB storage
+- [x] PostgreSQL storage
 - [x] Test suite
 - [x] Helper scripts
 
@@ -354,7 +355,8 @@ No wrapper scripts or environment setup needed!
 
 - **Python 3.11+** - Core language
 - **AWS Textract** - Production OCR ($1.50/1000 pages)
-- **DuckDB** - Embedded analytical database
+- **AWS Bedrock** - LLM for classification/summarization (Nova Lite)
+- **PostgreSQL 15+** - Production database with full-text search
 - **FastAPI** - REST API framework
 - **MCP SDK** - Model Context Protocol
 - **Pytest** - Testing framework
@@ -374,8 +376,8 @@ See `api-server/src/api_server/db/schema.sql` for complete schema.
 
 ## Statistics
 
-- **Lines of Code**: ~5,000+ lines (core + workers + scorers + MCP tools + API + Web UI)
-- **Test Coverage**: 14/14 tests passing (storage + worker infrastructure + pipeline integration)
+- **Lines of Code**: ~5,700+ lines (core + workers + scorers + MCP tools + API + Web UI)
+- **Test Coverage**: 20/20 tests passing (PostgreSQL database module + pipeline integration)
 - **OCR Accuracy**: 95%+ with AWS Textract
 - **Processing Speed**: ~2-3 seconds per page
 - **Worker Architecture**: 5 workers (OCR, Classifier, ClassifierScorer, Summarizer, SummarizerScorer)
@@ -387,7 +389,7 @@ See `api-server/src/api_server/db/schema.sql` for complete schema.
 
 ## Contributing
 
-See `IMPLEMENTATION_PLAN.md` for development roadmap and `PROGRESS.md` for current status.
+See `STATUS.md` for current status and development roadmap.
 
 ## License
 
@@ -396,9 +398,9 @@ MIT License - see `LICENSE` file for details.
 ## Documentation
 
 - **`START_HERE.md`** - Quick start guide
-- **`ARCHITECTURE.md`** - System architecture
-- **`IMPLEMENTATION_PLAN.md`** - Development roadmap
-- **`PROGRESS.md`** - Current status
+- **`ARCHITECTURE.md`** - System architecture and design decisions
+- **`STATUS.md`** - Current status and development roadmap
+- **`DOCUMENT_PROCESSING_DESIGN.md`** - Worker pipeline architecture
 
 ---
 

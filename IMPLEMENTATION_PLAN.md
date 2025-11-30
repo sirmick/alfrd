@@ -1,6 +1,10 @@
-# Implementation Plan - Commit-by-Commit Build Guide
+# Implementation Plan - Development Roadmap
 
-This document breaks down the implementation of the ALFRD (Automated Ledger & Filing Research Database) system into atomic, testable commits. Each commit represents a working milestone that can be deployed and tested independently.
+**Status:** Phase 1C Complete + PostgreSQL Migration (2025-11-30)
+
+This document outlines the implementation roadmap for ALFRD (Automated Ledger & Filing Research Database), tracking completed work and future enhancements.
+
+**Note:** This plan has been updated to reflect the PostgreSQL migration and current architecture.
 
 ## Branch Strategy
 
@@ -64,23 +68,28 @@ git commit -m "feat: initial project scaffolding and directory structure
 
 ---
 
-### Commit 2: Shared configuration and types
-**Branch**: `feature/phase-1-infrastructure`
-**Files**: `shared/config.py`, `shared/types.py`, `shared/constants.py`
+### Configuration and Types - ✅ COMPLETE
 
-**Implement**:
+**Files**: `shared/config.py`, `shared/types.py`, `shared/constants.py`, `shared/database.py`
+
+**Current Implementation**:
 ```python
-# shared/config.py
-from pydantic_settings import BaseSettings
-from pathlib import Path
-
+# shared/config.py - PostgreSQL Configuration
 class Settings(BaseSettings):
-    # API Keys
-    claude_api_key: str
-    openrouter_api_key: str = ""
+    # AWS Credentials
+    aws_access_key_id: str
+    aws_secret_access_key: str
+    aws_region: str = "us-east-1"
+    
+    # PostgreSQL Database
+    database_url: str = "postgresql://alfrd_user@/alfrd?host=/var/run/postgresql"
+    postgres_password: str = "alfrd_dev_password"
+    
+    # Connection Pool Settings
+    db_pool_min_size: int = 5
+    db_pool_max_size: int = 20
     
     # Paths
-    database_path: Path = Path("/data/esec.db")
     inbox_path: Path = Path("/data/inbox")
     documents_path: Path = Path("/data/documents")
     summaries_path: Path = Path("/data/summaries")
@@ -139,64 +148,26 @@ MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
 
 ```bash
 git add shared/
-git commit -m "feat: add shared configuration and type definitions
-
-- Implement Settings with pydantic-settings
-- Define core enums (DocumentStatus, DocumentCategory)
-- Add DocumentMetadata model
-- Define supported file types and constants"
+# shared/database.py - PostgreSQL Client with asyncpg
+class AlfrdDatabase:
+    def __init__(self, database_url: str, pool_min_size: int = 5, pool_max_size: int = 20):
+        self.database_url = database_url
+        self.pool: Optional[asyncpg.Pool] = None
+    
+    async def initialize(self):
+        self.pool = await asyncpg.create_pool(dsn=self.database_url, ...)
+    
+    # Document operations
+    async def create_document(self, doc_id: UUID, ...)
+    async def get_document(self, doc_id: UUID)
+    async def update_document(self, doc_id: UUID, **fields)
+    
+    # Prompt operations
+    async def get_active_prompt(self, prompt_type: str, document_type: str = None)
+    async def create_prompt(self, ...)
 ```
 
----
-
-### Commit 3: DuckDB schema and initialization
-**Branch**: `feature/phase-1-infrastructure`
-**Files**: `api-server/src/api_server/db/schema.sql`, `scripts/init-db.py`
-
-**Implement**:
-```sql
--- api-server/src/api_server/db/schema.sql
--- (Use schema from ARCHITECTURE.md)
-```
-
-```python
-# scripts/init-db.py
-import duckdb
-from pathlib import Path
-from shared.config import Settings
-
-def init_database():
-    settings = Settings()
-    db_path = settings.database_path
-    
-    # Create database
-    conn = duckdb.connect(str(db_path))
-    
-    # Read and execute schema
-    schema_path = Path("api-server/src/api_server/db/schema.sql")
-    with open(schema_path) as f:
-        schema_sql = f.read()
-    
-    conn.executescript(schema_sql)
-    conn.close()
-    
-    print(f"✓ Database initialized at {db_path}")
-
-if __name__ == "__main__":
-    init_database()
-```
-
-**Test**: Run script, verify tables exist
-
-```bash
-git add api-server/src/api_server/db/schema.sql scripts/init-db.py
-git commit -m "feat: add DuckDB schema and initialization script
-
-- Create complete database schema with FTS5 support
-- Add documents, summaries, events, and analytics tables
-- Implement init-db.py script for database setup
-- Add indexes for common query patterns"
-```
+**Status**: ✅ Complete with PostgreSQL migration
 
 ---
 
@@ -220,7 +191,8 @@ git commit -m "feat: add DuckDB schema and initialization script
 anthropic>=0.18.0
 fastapi>=0.109.0
 uvicorn>=0.27.0
-duckdb>=0.10.0
+psycopg2-binary>=2.9.0
+asyncpg>=0.29.0
 watchdog>=3.0.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
@@ -396,7 +368,7 @@ from datetime import datetime
 import shutil
 import json
 from uuid import uuid4
-import duckdb
+import asyncpg
 from shared.config import Settings
 from shared.types import DocumentStatus
 
@@ -435,9 +407,9 @@ class DocumentStorage:
         meta_file = meta_path / f"{doc_id}.json"
         meta_file.write_text(json.dumps(extracted_data["metadata"], indent=2))
         
-        # Insert into database
-        conn = duckdb.connect(str(self.db_path))
-        conn.execute("""
+        # Insert into database (PostgreSQL example)
+        conn = await asyncpg.connect(self.database_url)
+        await conn.execute("""
             INSERT INTO documents (
                 id, filename, original_path, file_type, file_size,
                 status, raw_document_path, extracted_text_path,
@@ -463,7 +435,7 @@ git commit -m "feat(document-processor): implement document storage
 
 - Store original files in dated directories
 - Save extracted text and metadata
-- Insert records into DuckDB
+- Insert records into PostgreSQL
 - Generate UUIDs for document tracking
 - Add comprehensive tests"
 ```
@@ -717,7 +689,7 @@ git commit -m "feat(document-processor): implement watchdog file monitoring
 **Implement**:
 ```python
 # api-server/src/api_server/db/connection.py
-import duckdb
+import asyncpg
 from contextlib import contextmanager
 from shared.config import Settings
 
@@ -727,7 +699,7 @@ class Database:
     
     @contextmanager
     def get_connection(self):
-        conn = duckdb.connect(self.db_path)
+        conn = await asyncpg.connect(self.database_url)
         try:
             yield conn
         finally:
@@ -1030,7 +1002,7 @@ git commit -m "feat: Phase 1 complete - basic document processing pipeline
 MVP milestone achieved:
 - Document processor with OCR
 - API server with document endpoints
-- DuckDB storage with full-text search
+- PostgreSQL storage with full-text search
 - Docker deployment
 - End-to-end integration tests
 
@@ -1180,21 +1152,30 @@ git tag v0.X.0
 git push --tags
 ```
 
-## Next Steps
+## Current Status Summary (2025-11-30)
 
-After completing Phase 1B:
-1. ✅ Worker pool architecture complete
-2. ✅ MCP integration complete
-3. ✅ Bill summarization working
-4. ⏳ Build PWA interface for mobile photo capture
-5. ⏳ Add integration tests for full pipeline
+### ✅ Phase 1: Complete
+- PostgreSQL database with full-text search
+- 5-worker self-improving pipeline
+- AWS Textract OCR with block preservation
+- AWS Bedrock LLM integration
+- Dynamic document type classification
+- Prompt evolution system
+- API server (5 endpoints)
+- Ionic React PWA (3 pages)
+- Docker deployment with Unix sockets
+- Comprehensive test suite (20 tests passing)
 
-### Phase 2 Priorities:
-1. **PWA Interface** - Ionic with camera capture, upload to API
-2. **Integration Tests** - Full pipeline tests (inbox → completed)
-3. **Enhanced Handlers** - FinanceHandler for account statements
-4. **Hierarchical Summaries** - Weekly → Monthly → Yearly rollups
-5. **Real-time Watching** - Watchdog file monitoring
+### ⏳ Phase 2: In Progress
+1. **PWA Integration** - Camera to API upload flow
+2. **Real-time Updates** - Document status in UI
+3. **End-to-End Testing** - Mobile workflow validation
+
+### ❌ Phase 3: Planned
+1. **Hierarchical Summaries** - Weekly → Monthly → Yearly rollups
+2. **Financial Tracking** - CSV exports and analytics
+3. **Analytics Dashboard** - Spending trends and insights
+4. **Advanced Search** - Complex queries and filters
 
 ---
 
@@ -1208,13 +1189,22 @@ After completing Phase 1B:
 
 ---
 
-## Architecture Decision Record - November 2024
+## Architecture Decision Record
 
-### ✅ IMPLEMENTED: Document Input Structure Change
+### ✅ PostgreSQL Migration (2025-11-30)
 
-**Decision:** Move from single-file inbox to folder-based document input with metadata.
+**Decision:** Use PostgreSQL for production scalability.
 
-**Status:** ✅ Complete (November 2024)
+**Rationale:**
+- Better multi-user support
+- Connection pooling with asyncpg
+- Full-text search with GIN indexes
+- JSONB for flexible structured data
+- Production-ready with proven scalability
+
+**Status:** ✅ Complete
+
+### ✅ Folder-Based Document Input (November 2024)
 
 **Structure:**
 ```
@@ -1244,11 +1234,7 @@ inbox/
 }
 ```
 
-### ✅ IMPLEMENTED: OCR Technology Selection
-
-**Decision:** Use AWS Textract for image OCR instead of Claude Vision.
-
-**Status:** ✅ Complete (November 2024)
+### ✅ AWS Textract OCR (November 2024)
 
 **Implementation Details:**
 - AWS Textract integrated with block-level data preservation
@@ -1279,7 +1265,7 @@ inbox/
    - Add to Weekly Summary
    - Roll up to Monthly Summary
    - Roll up to Yearly Summary
-7. Store all in DuckDB + filesystem
+7. Store all in PostgreSQL + filesystem
 ```
 
 ### Hierarchical Summarization Strategy
@@ -1287,7 +1273,7 @@ inbox/
 **Weekly Summaries:**
 - Generated per category (bills, receipts, etc.)
 - Include document count, total amounts, key items
-- Stored as JSON in DuckDB + markdown files
+- Stored as JSONB in PostgreSQL + markdown files
 
 **Monthly Summaries:**
 - Aggregate weekly summaries
@@ -1302,7 +1288,7 @@ inbox/
 ### Financial Document Tracking
 
 **For financial documents, maintain:**
-1. **DuckDB analytics tables** - Structured queries
+1. **PostgreSQL analytics tables** - Structured queries
 2. **CSV exports** - Excel compatibility, running totals per category
 3. **Pandas DataFrames** - In-memory analysis via MCP tools
 4. **MCP Financial Tools:**
@@ -1372,43 +1358,44 @@ inbox/
 3. Budget tracking
 4. Tax document preparation
 
-### Dependencies Status
+### Current Dependencies
 
-**✅ Removed:**
-- `anthropic` (Claude API) - from document-processor OCR (still in MCP server)
+**PostgreSQL Stack:**
+- `asyncpg` - PostgreSQL async driver
+- `psycopg2-binary` - PostgreSQL sync driver (for scripts)
 
-**✅ Added:**
-- `boto3` - AWS SDK for Textract
+**AWS Services:**
+- `boto3` - AWS SDK (Textract + Bedrock)
+- `botocore` - AWS core library
+
+**Testing:**
 - `pytest` - Testing framework
 - `pytest-asyncio` - Async test support
 
-**⏳ Keeping for Now:**
-- `pypdf` - May use for PDF text extraction
+**Web Framework:**
+- `fastapi` - API server
+- `uvicorn` - ASGI server
+- `pydantic` - Data validation
+- `pydantic-settings` - Configuration
 
-**📋 To Add (Phase 1B/2):**
-- `pandas` - Financial data analysis
-- `openpyxl` - Excel export support
+**Document Processing:**
+- `Pillow` - Image processing
+- `pypdf` - PDF text extraction
 
-### Database Schema Additions
+**Web UI:**
+- `@ionic/react` - Mobile UI framework
+- `vite` - Build tool
+- `react` - UI library
 
-**New tables for hierarchical summaries:**
-```sql
--- Weekly summaries with financial data
-ALTER TABLE summaries ADD COLUMN financial_data JSON;
-ALTER TABLE summaries ADD COLUMN csv_export_path VARCHAR;
+### Database Schema
 
--- Running totals tracking
-CREATE TABLE financial_totals (
-    id UUID PRIMARY KEY DEFAULT uuid(),
-    period_start DATE NOT NULL,
-    period_end DATE NOT NULL,
-    category VARCHAR NOT NULL,
-    subcategory VARCHAR,
-    total_amount DECIMAL(12, 2),
-    transaction_count INTEGER,
-    vendors JSON,  -- Array of vendors in period
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(period_start, period_end, category, subcategory)
-);
-```
+Complete PostgreSQL schema with:
+- Full-text search (GIN indexes on TSVECTOR)
+- JSONB for structured data
+- Self-improving prompts tables
+- Document types (dynamic)
+- Classification suggestions
+- Processing events
+- Analytics tables
+
+See: `api-server/src/api_server/db/schema.sql`
