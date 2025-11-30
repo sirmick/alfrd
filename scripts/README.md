@@ -30,6 +30,19 @@ Command-line utilities for ALFRD document management system.
 # View documents
 ./scripts/view-document              # List all documents
 ./scripts/view-document <doc-id>     # View specific document
+
+# View prompts (classification and summarization)
+./scripts/view-prompts              # View all prompts
+./scripts/view-prompts --type classifier
+```
+
+### AWS Utilities
+
+```bash
+# Get current AWS billing information
+./scripts/get-aws-bill              # Current month summary
+./scripts/get-aws-bill --daily      # Include daily trend
+./scripts/get-aws-bill --json       # Raw JSON output
 ```
 
 ### Service Management
