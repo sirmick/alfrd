@@ -1,0 +1,116 @@
+#!/bin/bash
+# Batch import all generated test dataset files into ALFRD
+
+# Get project root (scripts folder parent)
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+
+# Test dataset generator output directory
+DATASET_DIR="$PROJECT_ROOT/test-dataset-generator/output"
+
+# Check if dataset directory exists
+if [ ! -d "$DATASET_DIR" ]; then
+    echo "❌ Error: Dataset directory not found at $DATASET_DIR"
+    echo "   Please run the test dataset generator first:"
+    echo "   cd test-dataset-generator && python generator.py"
+    exit 1
+fi
+
+# Counter for imported documents
+TOTAL=0
+SUCCESS=0
+FAILED=0
+
+echo "📁 Importing test dataset from $DATASET_DIR"
+echo ""
+
+# Import utility bills (PG&E)
+if [ -d "$DATASET_DIR/bills" ]; then
+    echo "⚡ Importing utility bills..."
+    for file in "$DATASET_DIR/bills"/*.jpg; do
+        if [ -f "$file" ]; then
+            TOTAL=$((TOTAL + 1))
+            echo "  → $(basename "$file")"
+            if "$SCRIPT_DIR/add-document" "$file" --tags bill utilities pge --source test-dataset 2>/dev/null; then
+                SUCCESS=$((SUCCESS + 1))
+            else
+                FAILED=$((FAILED + 1))
+                echo "    ⚠️  Failed to import"
+            fi
+        fi
+    done
+    echo ""
+fi
+
+# Import rent receipts
+if [ -d "$DATASET_DIR/property" ]; then
+    echo "🏠 Importing rent receipts..."
+    for file in "$DATASET_DIR/property"/*.jpg; do
+        if [ -f "$file" ]; then
+            TOTAL=$((TOTAL + 1))
+            echo "  → $(basename "$file")"
+            if "$SCRIPT_DIR/add-document" "$file" --tags property rent receipt --source test-dataset 2>/dev/null; then
+                SUCCESS=$((SUCCESS + 1))
+            else
+                FAILED=$((FAILED + 1))
+                echo "    ⚠️  Failed to import"
+            fi
+        fi
+    done
+    echo ""
+fi
+
+# Import vehicle insurance bills
+if [ -d "$DATASET_DIR/vehicle" ]; then
+    echo "🚗 Importing vehicle insurance bills..."
+    for file in "$DATASET_DIR/vehicle"/*.jpg; do
+        if [ -f "$file" ]; then
+            TOTAL=$((TOTAL + 1))
+            echo "  → $(basename "$file")"
+            if "$SCRIPT_DIR/add-document" "$file" --tags vehicle insurance bill --source test-dataset 2>/dev/null; then
+                SUCCESS=$((SUCCESS + 1))
+            else
+                FAILED=$((FAILED + 1))
+                echo "    ⚠️  Failed to import"
+            fi
+        fi
+    done
+    echo ""
+fi
+
+# Import school tuition bills
+if [ -d "$DATASET_DIR/school" ]; then
+    echo "🎓 Importing tuition bills..."
+    for file in "$DATASET_DIR/school"/*.jpg; do
+        if [ -f "$file" ]; then
+            TOTAL=$((TOTAL + 1))
+            echo "  → $(basename "$file")"
+            if "$SCRIPT_DIR/add-document" "$file" --tags school tuition education --source test-dataset 2>/dev/null; then
+                SUCCESS=$((SUCCESS + 1))
+            else
+                FAILED=$((FAILED + 1))
+                echo "    ⚠️  Failed to import"
+            fi
+        fi
+    done
+    echo ""
+fi
+
+# Summary
+echo "═══════════════════════════════════════════════════════════"
+echo "📊 Import Summary"
+echo "═══════════════════════════════════════════════════════════"
+echo "   Total:   $TOTAL documents"
+echo "   ✅ Success: $SUCCESS documents"
+if [ $FAILED -gt 0 ]; then
+    echo "   ❌ Failed:  $FAILED documents"
+fi
+echo ""
+
+if [ $SUCCESS -gt 0 ]; then
+    echo "✨ Documents added to inbox! Process them with:"
+    echo "   ./scripts/start-processor"
+    echo ""
+    echo "📋 View imported documents with:"
+    echo "   ./scripts/view-document --list"
+fi
