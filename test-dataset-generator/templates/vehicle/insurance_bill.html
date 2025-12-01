@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto Insurance Bill</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            padding: 40px;
+            background: white;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: start;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #dc1e28;
+        }
+        
+        .logo-section {
+            flex: 1;
+        }
+        
+        .logo {
+            font-size: 32px;
+            font-weight: bold;
+            color: #dc1e28;
+            margin-bottom: 5px;
+        }
+        
+        .tagline {
+            font-size: 13px;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .bill-summary {
+            text-align: right;
+        }
+        
+        .bill-summary .label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+        
+        .bill-summary .amount {
+            font-size: 32px;
+            font-weight: bold;
+            color: #dc1e28;
+            margin-bottom: 5px;
+        }
+        
+        .bill-summary .due-date {
+            font-size: 14px;
+            color: #333;
+        }
+        
+        .bill-summary .due-date strong {
+            color: #dc1e28;
+        }
+        
+        .customer-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .info-box {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 5px;
+        }
+        
+        .info-box h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            color: #666;
+            margin-bottom: 10px;
+            letter-spacing: 0.5px;
+        }
+        
+        .info-box p {
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .policy-number {
+            font-weight: bold;
+            color: #dc1e28;
+            font-size: 15px;
+        }
+        
+        .vehicle-info {
+            background: #fff;
+            border: 2px solid #dc1e28;
+            padding: 20px;
+            margin-bottom: 25px;
+            border-radius: 5px;
+        }
+        
+        .vehicle-info h2 {
+            font-size: 16px;
+            color: #dc1e28;
+            margin-bottom: 15px;
+        }
+        
+        .vehicle-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+        
+        .vehicle-detail {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .vehicle-detail .label {
+            color: #666;
+            font-size: 13px;
+        }
+        
+        .vehicle-detail .value {
+            font-weight: bold;
+            font-size: 13px;
+        }
+        
+        .coverage-table {
+            width: 100%;
+            margin-bottom: 25px;
+            border-collapse: collapse;
+        }
+        
+        .coverage-table thead {
+            background: #dc1e28;
+            color: white;
+        }
+        
+        .coverage-table th {
+            padding: 12px;
+            text-align: left;
+            font-size: 12px;
+            text-transform: uppercase;
+            font-weight: normal;
+        }
+        
+        .coverage-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #ddd;
+            font-size: 14px;
+        }
+        
+        .coverage-table .limit-col {
+            text-align: center;
+            color: #666;
+        }
+        
+        .coverage-table .premium-col {
+            text-align: right;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .section-header {
+            background: #f0f0f0;
+            font-weight: bold;
+            font-size: 13px;
+        }
+        
+        .total-row {
+            background: #dc1e28;
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        
+        .total-row td {
+            padding: 15px 12px;
+        }
+        
+        .payment-info {
+            background: #fff9e6;
+            border-left: 4px solid #ffc107;
+            padding: 20px;
+            margin-bottom: 25px;
+        }
+        
+        .payment-info h3 {
+            font-size: 14px;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        
+        .payment-info p {
+            font-size: 13px;
+            line-height: 1.6;
+            margin-bottom: 8px;
+        }
+        
+        .important-notice {
+            background: #ffe6e6;
+            border: 2px solid #dc1e28;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+        
+        .important-notice h4 {
+            color: #dc1e28;
+            font-size: 13px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+        
+        .important-notice p {
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        
+        .footer {
+            font-size: 11px;
+            color: #666;
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            line-height: 1.6;
+        }
+        
+        .agent-info {
+            background: #f9f9f9;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+        
+        .agent-info h4 {
+            font-size: 13px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+        
+        .agent-info p {
+            font-size: 13px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="logo-section">
+                <div class="logo">{{ insurance_company }}</div>
+                <div class="tagline">{{ company_tagline }}</div>
+            </div>
+            <div class="bill-summary">
+                <div class="label">Amount Due</div>
+                <div class="amount">${{ "%.2f"|format(amount_due) }}</div>
+                <div class="due-date">Due: <strong>{{ due_date }}</strong></div>
+            </div>
+        </div>
+        
+        <div class="customer-info">
+            <div class="info-box">
+                <h3>Policyholder</h3>
+                <p>
+                    {{ customer_name }}<br>
+                    {{ address_line1 }}<br>
+                    {{ address_city }}, {{ address_state }} {{ address_zip }}
+                </p>
+            </div>
+            <div class="info-box">
+                <h3>Policy Information</h3>
+                <p>
+                    Policy Number: <span class="policy-number">{{ policy_number }}</span><br>
+                    Policy Period: {{ policy_period }}<br>
+                    Billing Period: {{ billing_period }}
+                </p>
+            </div>
+        </div>
+        
+        <div class="vehicle-info">
+            <h2>Insured Vehicle</h2>
+            <div class="vehicle-grid">
+                <div class="vehicle-detail">
+                    <span class="label">Year/Make/Model:</span>
+                    <span class="value">{{ vehicle_year }} {{ vehicle_make }} {{ vehicle_model }}</span>
+                </div>
+                <div class="vehicle-detail">
+                    <span class="label">VIN:</span>
+                    <span class="value">{{ vehicle_vin }}</span>
+                </div>
+                <div class="vehicle-detail">
+                    <span class="label">License Plate:</span>
+                    <span class="value">{{ license_plate }}</span>
+                </div>
+                <div class="vehicle-detail">
+                    <span class="label">Color:</span>
+                    <span class="value">{{ vehicle_color }}</span>
+                </div>
+            </div>
+        </div>
+        
+        <table class="coverage-table">
+            <thead>
+                <tr>
+                    <th>Coverage</th>
+                    <th class="limit-col">Limit/Deductible</th>
+                    <th class="premium-col">Premium</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="section-header">
+                    <td colspan="3">LIABILITY COVERAGE</td>
+                </tr>
+                <tr>
+                    <td>Bodily Injury Liability</td>
+                    <td class="limit-col">{{ bodily_injury_limit }}</td>
+                    <td class="premium-col">${{ "%.2f"|format(bodily_injury_premium) }}</td>
+                </tr>
+                <tr>
+                    <td>Property Damage Liability</td>
+                    <td class="limit-col">{{ property_damage_limit }}</td>
+                    <td class="premium-col">${{ "%.2f"|format(property_damage_premium) }}</td>
+                </tr>
+                
+                <tr class="section-header">
+                    <td colspan="3">PHYSICAL DAMAGE COVERAGE</td>
+                </tr>
+                <tr>
+                    <td>Comprehensive Coverage</td>
+                    <td class="limit-col">${{ comprehensive_deductible }} Deductible</td>
+                    <td class="premium-col">${{ "%.2f"|format(comprehensive_premium) }}</td>
+                </tr>
+                <tr>
+                    <td>Collision Coverage</td>
+                    <td class="limit-col">${{ collision_deductible }} Deductible</td>
+                    <td class="premium-col">${{ "%.2f"|format(collision_premium) }}</td>
+                </tr>
+                
+                <tr class="section-header">
+                    <td colspan="3">ADDITIONAL COVERAGE</td>
+                </tr>
+                <tr>
+                    <td>Uninsured Motorist</td>
+                    <td class="limit-col">{{ uninsured_limit }}</td>
+                    <td class="premium-col">${{ "%.2f"|format(uninsured_premium) }}</td>
+                </tr>
+                <tr>
+                    <td>Medical Payments</td>
+                    <td class="limit-col">{{ medical_limit }}</td>
+                    <td class="premium-col">${{ "%.2f"|format(medical_premium) }}</td>
+                </tr>
+                <tr>
+                    <td>Roadside Assistance</td>
+                    <td class="limit-col">Included</td>
+                    <td class="premium-col">${{ "%.2f"|format(roadside_premium) }}</td>
+                </tr>
+                
+                <tr class="total-row">
+                    <td colspan="2">TOTAL MONTHLY PREMIUM</td>
+                    <td class="premium-col">${{ "%.2f"|format(amount_due) }}</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <div class="important-notice">
+            <h4>⚠ Important Notice</h4>
+            <p>Your insurance payment is due by {{ due_date }}. Failure to pay by this date may result in cancellation of your policy and a lapse in coverage. Late payments may incur a $25 late fee.</p>
+        </div>
+        
+        <div class="payment-info">
+            <h3>Payment Options</h3>
+            <p><strong>Online:</strong> Visit {{ company_website }}/payments</p>
+            <p><strong>By Phone:</strong> Call {{ payment_phone }} (24/7 automated service)</p>
+            <p><strong>By Mail:</strong> {{ insurance_company }}, P.O. Box {{ po_box }}, {{ mail_city }}, {{ mail_state }} {{ mail_zip }}</p>
+            <p><strong>Auto-Pay:</strong> Enroll in automatic payments to never miss a due date</p>
+        </div>
+        
+        <div class="agent-info">
+            <h4>Your Local Agent</h4>
+            <p>
+                <strong>{{ agent_name }}</strong><br>
+                Phone: {{ agent_phone }}<br>
+                Email: {{ agent_email }}<br>
+                Available Mon-Fri 9AM-6PM, Sat 9AM-1PM
+            </p>
+        </div>
+        
+        <div class="footer">
+            <p>{{ insurance_company }} | {{ company_address }}</p>
+            <p>Customer Service: {{ customer_service_phone }} | {{ company_website }}</p>
+            <p>This is your billing statement for the period {{ billing_period }}</p>
+            <p>Policy Number: {{ policy_number }} | Statement Date: {{ statement_date }}</p>
+        </div>
+    </div>
+</body>
+</html>

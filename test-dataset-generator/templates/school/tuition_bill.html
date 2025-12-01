@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tuition Bill</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Times New Roman', serif;
+            padding: 40px;
+            background: white;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 3px solid #8b0000;
+        }
+        
+        .university-logo {
+            font-size: 28px;
+            font-weight: bold;
+            color: #8b0000;
+            margin-bottom: 5px;
+            letter-spacing: 1px;
+        }
+        
+        .department {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            margin-top: 15px;
+            color: #333;
+        }
+        
+        .bill-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .info-section h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            color: #666;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+        }
+        
+        .info-section p {
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .student-id {
+            font-weight: bold;
+            color: #8b0000;
+        }
+        
+        .semester-info {
+            background: #f5f5f5;
+            padding: 20px;
+            margin-bottom: 25px;
+            text-align: center;
+            border-left: 4px solid #8b0000;
+        }
+        
+        .semester-info h2 {
+            font-size: 18px;
+            color: #8b0000;
+            margin-bottom: 5px;
+        }
+        
+        .semester-info .dates {
+            font-size: 13px;
+            color: #666;
+        }
+        
+        .charges-table {
+            width: 100%;
+            margin-bottom: 25px;
+            border-collapse: collapse;
+        }
+        
+        .charges-table thead {
+            background: #8b0000;
+            color: white;
+        }
+        
+        .charges-table th {
+            padding: 12px;
+            text-align: left;
+            font-size: 12px;
+            text-transform: uppercase;
+            font-weight: normal;
+            letter-spacing: 0.5px;
+        }
+        
+        .charges-table td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #ddd;
+            font-size: 14px;
+        }
+        
+        .charges-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .charges-table .amount-col {
+            text-align: right;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .section-header {
+            background: #f0f0f0;
+            font-weight: bold;
+            font-size: 13px;
+        }
+        
+        .subtotal-row {
+            font-weight: bold;
+            background: #f9f9f9;
+        }
+        
+        .total-row {
+            background: #8b0000;
+            color: white;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        
+        .total-row td {
+            padding: 15px 12px;
+        }
+        
+        .payment-due {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            padding: 20px;
+            margin-bottom: 25px;
+            border-radius: 5px;
+        }
+        
+        .payment-due h3 {
+            color: #856404;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        
+        .payment-due .due-date {
+            font-size: 20px;
+            font-weight: bold;
+            color: #d00;
+            margin: 10px 0;
+        }
+        
+        .payment-due p {
+            font-size: 13px;
+            line-height: 1.6;
+            margin-bottom: 8px;
+        }
+        
+        .enrollment-info {
+            margin-bottom: 25px;
+        }
+        
+        .enrollment-info h3 {
+            font-size: 14px;
+            margin-bottom: 10px;
+            color: #8b0000;
+        }
+        
+        .courses-list {
+            background: #f9f9f9;
+            padding: 15px;
+            font-size: 13px;
+            line-height: 1.8;
+        }
+        
+        .course-item {
+            padding: 5px 0;
+            border-bottom: 1px dotted #ccc;
+        }
+        
+        .course-item:last-child {
+            border-bottom: none;
+        }
+        
+        .course-code {
+            font-weight: bold;
+            color: #8b0000;
+        }
+        
+        .footer {
+            font-size: 11px;
+            color: #666;
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="university-logo">{{ university_name }}</div>
+            <div class="department">Office of Student Accounts</div>
+            <h1>Student Account Statement</h1>
+        </div>
+        
+        <div class="bill-info">
+            <div class="info-section">
+                <h3>Student Information</h3>
+                <p>
+                    {{ student_name }}<br>
+                    Student ID: <span class="student-id">{{ student_id }}</span><br>
+                    {{ student_email }}<br>
+                    Major: {{ major }}
+                </p>
+            </div>
+            <div class="info-section">
+                <h3>Billing Address</h3>
+                <p>
+                    {{ address_line1 }}<br>
+                    {{ address_city }}, {{ address_state }} {{ address_zip }}
+                </p>
+            </div>
+        </div>
+        
+        <div class="semester-info">
+            <h2>{{ semester_name }}</h2>
+            <div class="dates">{{ semester_dates }}</div>
+        </div>
+        
+        <table class="charges-table">
+            <thead>
+                <tr>
+                    <th>Description</th>
+                    <th class="amount-col">Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="section-header">
+                    <td colspan="2">TUITION & FEES</td>
+                </tr>
+                <tr>
+                    <td>Base Tuition ({{ credit_hours }} units @ ${{ per_unit_cost }}/unit)</td>
+                    <td class="amount-col">${{ "%.2f"|format(tuition) }}</td>
+                </tr>
+                <tr>
+                    <td>Student Services Fee</td>
+                    <td class="amount-col">${{ "%.2f"|format(services_fee) }}</td>
+                </tr>
+                <tr>
+                    <td>Technology Fee</td>
+                    <td class="amount-col">${{ "%.2f"|format(tech_fee) }}</td>
+                </tr>
+                <tr>
+                    <td>Health Services Fee</td>
+                    <td class="amount-col">${{ "%.2f"|format(health_fee) }}</td>
+                </tr>
+                <tr class="subtotal-row">
+                    <td>Subtotal - Tuition & Fees</td>
+                    <td class="amount-col">${{ "%.2f"|format(tuition_subtotal) }}</td>
+                </tr>
+                
+                {% if has_housing %}
+                <tr class="section-header">
+                    <td colspan="2">HOUSING</td>
+                </tr>
+                <tr>
+                    <td>Campus Housing ({{ housing_type }})</td>
+                    <td class="amount-col">${{ "%.2f"|format(housing_cost) }}</td>
+                </tr>
+                {% endif %}
+                
+                {% if has_meal_plan %}
+                <tr class="section-header">
+                    <td colspan="2">MEAL PLAN</td>
+                </tr>
+                <tr>
+                    <td>{{ meal_plan_name }}</td>
+                    <td class="amount-col">${{ "%.2f"|format(meal_plan_cost) }}</td>
+                </tr>
+                {% endif %}
+                
+                {% if has_financial_aid %}
+                <tr class="section-header">
+                    <td colspan="2">FINANCIAL AID</td>
+                </tr>
+                <tr>
+                    <td>{{ aid_name }}</td>
+                    <td class="amount-col">-${{ "%.2f"|format(aid_amount) }}</td>
+                </tr>
+                {% endif %}
+                
+                <tr class="total-row">
+                    <td>TOTAL AMOUNT DUE</td>
+                    <td class="amount-col">${{ "%.2f"|format(total_due) }}</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <div class="payment-due">
+            <h3>Payment Information</h3>
+            <p><strong>Due Date:</strong></p>
+            <div class="due-date">{{ due_date }}</div>
+            <p>Payment must be received by the due date to avoid a $100 late payment fee and potential disenrollment from classes.</p>
+            <p><strong>Payment Options:</strong></p>
+            <p>• Online: <a href="#">student.{{ university_short }}.edu/payments</a><br>
+            • By Mail: Student Accounts, {{ university_name }}, {{ university_address }}<br>
+            • In Person: Bursar's Office, Administration Building, Room 120</p>
+        </div>
+        
+        <div class="enrollment-info">
+            <h3>Enrolled Courses ({{ credit_hours }} Units)</h3>
+            <div class="courses-list">
+                {% for course in courses %}
+                <div class="course-item">
+                    <span class="course-code">{{ course.code }}</span> - {{ course.name }} ({{ course.units }} units)
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>{{ university_name }} | {{ university_address }}</p>
+            <p>Student Accounts Office | Phone: {{ office_phone }} | Email: {{ office_email }}</p>
+            <p>Statement Date: {{ statement_date }} | Account Number: {{ account_number }}</p>
+        </div>
+    </div>
+</body>
+</html>

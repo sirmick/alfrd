@@ -642,6 +642,314 @@ class AlfrdDatabase:
         return suggestion_id
     
     # ==========================================
+    # FILE OPERATIONS
+    # ==========================================
+    
+    def create_tag_signature(self, document_type: str, tags: list[str]) -> str:
+        """Create normalized signature for file lookup.
+        
+        Args:
+            document_type: Document type
+            tags: List of tags
+            
+        Returns:
+            Normalized signature string (e.g., "bill:lexus-tx-550:oil-change")
+        """
+        # Sort tags alphabetically, lowercase
+        sorted_tags = sorted([tag.lower().strip() for tag in tags if tag])
+        # Format: "type:tag1:tag2:tag3"
+        return f"{document_type.lower()}:{':'.join(sorted_tags)}" if sorted_tags else document_type.lower()
+    
+    async def find_or_create_file(
+        self,
+        file_id: UUID,
+        document_type: str,
+        tags: list[str],
+        user_id: str = None
+    ) -> Dict[str, Any]:
+        """Find existing file or create new one.
+        
+        Args:
+            file_id: File UUID to use if creating
+            document_type: Document type
+            tags: List of tags
+            user_id: User ID for multi-user support
+            
+        Returns:
+            File record dict
+        """
+        await self.initialize()
+        
+        signature = self.create_tag_signature(document_type, tags)
+        
+        async with self.pool.acquire() as conn:
+            # Try to find existing file
+            row = await conn.fetchrow("""
+                SELECT id, document_type, tags, tag_signature,
+                       document_count, first_document_date, last_document_date,
+                       summary_text, summary_metadata, prompt_version,
+                       status, created_at, updated_at, last_generated_at, user_id
+                FROM files
+                WHERE tag_signature = $1 AND (user_id = $2 OR ($2 IS NULL AND user_id IS NULL))
+            """, signature, user_id)
+            
+            if row:
+                return dict(row)
+            
+            # Create new file
+            import json
+            await conn.execute("""
+                INSERT INTO files (
+                    id, document_type, tags, tag_signature,
+                    document_count, status, created_at, updated_at, user_id
+                ) VALUES ($1, $2, $3, $4, 0, 'pending', $5, $6, $7)
+            """, file_id, document_type, json.dumps(tags), signature,
+                utc_now(), utc_now(), user_id)
+            
+            # Fetch and return new file
+            row = await conn.fetchrow("""
+                SELECT id, document_type, tags, tag_signature,
+                       document_count, status, created_at, updated_at, user_id
+                FROM files
+                WHERE id = $1
+            """, file_id)
+            
+            return dict(row)
+    
+    async def add_document_to_file(self, file_id: UUID, document_id: UUID):
+        """Add document to file (if not already present).
+        
+        Args:
+            file_id: File UUID
+            document_id: Document UUID
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            # Check if already exists
+            exists = await conn.fetchval("""
+                SELECT 1 FROM file_documents
+                WHERE file_id = $1 AND document_id = $2
+            """, file_id, document_id)
+            
+            if not exists:
+                await conn.execute("""
+                    INSERT INTO file_documents (file_id, document_id, added_at)
+                    VALUES ($1, $2, $3)
+                """, file_id, document_id, utc_now())
+                
+                # Update file document count and dates
+                await conn.execute("""
+                    UPDATE files
+                    SET document_count = document_count + 1,
+                        first_document_date = COALESCE(
+                            first_document_date,
+                            (SELECT created_at FROM documents WHERE id = $2)
+                        ),
+                        last_document_date = GREATEST(
+                            COALESCE(last_document_date, '1970-01-01'::timestamp),
+                            (SELECT created_at FROM documents WHERE id = $2)
+                        ),
+                        updated_at = $3
+                    WHERE id = $1
+                """, file_id, document_id, utc_now())
+    
+    async def mark_file_outdated(self, file_id: UUID):
+        """Mark file as needing regeneration.
+        
+        Args:
+            file_id: File UUID
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE files
+                SET status = 'outdated', updated_at = $2
+                WHERE id = $1 AND status = 'generated'
+            """, file_id, utc_now())
+    
+    async def get_file(self, file_id: UUID) -> Optional[Dict[str, Any]]:
+        """Get file by ID.
+        
+        Args:
+            file_id: File UUID
+            
+        Returns:
+            File dict or None if not found
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, document_type, tags, tag_signature,
+                       document_count, first_document_date, last_document_date,
+                       summary_text, summary_metadata, prompt_version,
+                       status, created_at, updated_at, last_generated_at, user_id
+                FROM files
+                WHERE id = $1
+            """, file_id)
+            
+            return dict(row) if row else None
+    
+    async def get_files_by_status(self, statuses: list[str], limit: int = 10) -> List[Dict[str, Any]]:
+        """Get files with specific statuses.
+        
+        Args:
+            statuses: List of statuses to filter by
+            limit: Maximum number of files to return
+            
+        Returns:
+            List of file dicts
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, document_type, tags, tag_signature,
+                       document_count, status, updated_at, last_generated_at
+                FROM files
+                WHERE status = ANY($1::text[])
+                ORDER BY updated_at ASC
+                LIMIT $2
+            """, statuses, limit)
+            
+            return [dict(row) for row in rows]
+    
+    async def get_file_documents(
+        self,
+        file_id: UUID,
+        order_by: str = "created_at ASC"
+    ) -> List[Dict[str, Any]]:
+        """Get all documents in a file.
+        
+        Args:
+            file_id: File UUID
+            order_by: SQL ORDER BY clause
+            
+        Returns:
+            List of document dicts
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(f"""
+                SELECT d.id, d.filename, d.created_at, d.document_type,
+                       d.summary, d.structured_data, d.extracted_text,
+                       fd.added_at
+                FROM documents d
+                JOIN file_documents fd ON d.id = fd.document_id
+                WHERE fd.file_id = $1
+                ORDER BY d.{order_by}
+            """, file_id)
+            
+            return [dict(row) for row in rows]
+    
+    async def update_file(self, file_id: UUID, **fields):
+        """Update file fields.
+        
+        Args:
+            file_id: File UUID
+            **fields: Fields to update (key=value pairs)
+        """
+        await self.initialize()
+        
+        if not fields:
+            return
+        
+        # Build dynamic UPDATE query
+        set_clauses = [f"{key} = ${i+2}" for i, key in enumerate(fields.keys())]
+        set_clause = ", ".join(set_clauses)
+        values = list(fields.values())
+        
+        query = f"""
+            UPDATE files
+            SET {set_clause}, updated_at = ${len(values) + 2}
+            WHERE id = $1
+        """
+        
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, file_id, *values, utc_now())
+    
+    async def list_files(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        document_type: str = None,
+        tags: list[str] = None,
+        status: str = None,
+        user_id: str = None
+    ) -> List[Dict[str, Any]]:
+        """List files with optional filtering.
+        
+        Args:
+            limit: Maximum number of files
+            offset: Pagination offset
+            document_type: Filter by document type
+            tags: Filter by tags (contains all)
+            status: Filter by status
+            user_id: Filter by user
+            
+        Returns:
+            List of file dicts
+        """
+        await self.initialize()
+        
+        conditions = []
+        params = []
+        param_count = 1
+        
+        if document_type:
+            conditions.append(f"document_type = ${param_count}")
+            params.append(document_type)
+            param_count += 1
+        
+        if tags:
+            import json
+            conditions.append(f"tags @> ${param_count}::jsonb")
+            params.append(json.dumps(tags))
+            param_count += 1
+        
+        if status:
+            conditions.append(f"status = ${param_count}")
+            params.append(status)
+            param_count += 1
+        
+        if user_id is not None:
+            conditions.append(f"(user_id = ${param_count} OR (${param_count} IS NULL AND user_id IS NULL))")
+            params.append(user_id)
+            param_count += 1
+        
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        
+        params.extend([limit, offset])
+        
+        query = f"""
+            SELECT id, document_type, tags, tag_signature,
+                   document_count, first_document_date, last_document_date,
+                   summary_text, status, created_at, updated_at
+            FROM files
+            {where_clause}
+            ORDER BY updated_at DESC
+            LIMIT ${param_count} OFFSET ${param_count + 1}
+        """
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+            return [dict(row) for row in rows]
+    
+    async def delete_file(self, file_id: UUID):
+        """Delete file (cascade deletes file_documents).
+        
+        Args:
+            file_id: File UUID
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM files WHERE id = $1", file_id)
+    
+    # ==========================================
     # UTILITY OPERATIONS
     # ==========================================
     
@@ -656,19 +964,29 @@ class AlfrdDatabase:
         async with self.pool.acquire() as conn:
             total_docs = await conn.fetchval("SELECT COUNT(*) FROM documents")
             by_status = await conn.fetch("""
-                SELECT status, COUNT(*) as count 
-                FROM documents 
+                SELECT status, COUNT(*) as count
+                FROM documents
                 GROUP BY status
             """)
             by_type = await conn.fetch("""
-                SELECT document_type, COUNT(*) as count 
-                FROM documents 
+                SELECT document_type, COUNT(*) as count
+                FROM documents
                 WHERE document_type IS NOT NULL
                 GROUP BY document_type
+            """)
+            
+            # File statistics
+            total_files = await conn.fetchval("SELECT COUNT(*) FROM files")
+            files_by_status = await conn.fetch("""
+                SELECT status, COUNT(*) as count
+                FROM files
+                GROUP BY status
             """)
             
             return {
                 "total_documents": total_docs,
                 "by_status": {row['status']: row['count'] for row in by_status},
-                "by_type": {row['document_type']: row['count'] for row in by_type}
+                "by_type": {row['document_type']: row['count'] for row in by_type},
+                "total_files": total_files,
+                "files_by_status": {row['status']: row['count'] for row in files_by_status}
             }

@@ -1,0 +1,19 @@
+# Test Dataset Generator Dependencies
+
+# Templating
+Jinja2>=3.1.2
+
+# Fake data generation
+Faker>=22.0.0
+
+# Browser automation for HTML to image
+playwright>=1.40.0
+
+# Image processing
+Pillow>=10.2.0
+
+# YAML parsing
+PyYAML>=6.0.1
+
+# Date/time utilities
+python-dateutil>=2.8.2

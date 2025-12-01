@@ -1,0 +1,185 @@
+# Persona: Alex Johnson
+# A realistic test persona for ALFRD document processing system
+
+personal:
+  name: "Alex Johnson"
+  email: "alex.johnson@email.com"
+  phone: "(555) 123-4567"
+  ssn: "123-45-6789"  # Fake SSN for tax documents
+  date_of_birth: "1998-03-15"
+
+address:
+  street: "123 Oak Street, Apt 4B"
+  city: "San Francisco"
+  state: "CA"
+  zip: "94102"
+
+# School information
+school:
+  name: "San Francisco State University"
+  student_id: "SF20241234"
+  major: "Computer Science"
+  email: "ajohnson@sfsu.edu"
+  tuition_per_semester: 8500
+  enrollment_fee: 150
+  exam_schedule:
+    spring:
+      - date: "2024-03-15"
+        course: "CS 301 - Algorithms"
+        time: "9:00 AM - 12:00 PM"
+      - date: "2024-03-20"
+        course: "CS 302 - Database Systems"
+        time: "2:00 PM - 5:00 PM"
+      - date: "2024-05-10"
+        course: "CS 401 - Machine Learning"
+        time: "10:00 AM - 1:00 PM"
+    fall:
+      - date: "2024-11-12"
+        course: "CS 450 - Distributed Systems"
+        time: "9:00 AM - 12:00 PM"
+      - date: "2024-11-18"
+        course: "CS 451 - Cloud Computing"
+        time: "1:00 PM - 4:00 PM"
+
+# Housing information
+housing:
+  landlord: "Bay Area Properties LLC"
+  landlord_email: "rent@bayareaprops.com"
+  landlord_phone: "(415) 555-9000"
+  property_manager: "Sarah Martinez"
+  rent: 2400
+  lease_start: "2023-09-01"
+  lease_end: "2024-08-31"
+  security_deposit: 4800
+  unit_number: "4B"
+
+# Vehicle information
+vehicle:
+  make: "Honda"
+  model: "Civic"
+  year: 2019
+  vin: "1HGBH41JXMN109186"
+  license_plate: "7ABC123"
+  color: "Silver"
+  insurance:
+    company: "State Farm Insurance"
+    policy_number: "SF-AUTO-2024-987654"
+    monthly_premium: 145
+    coverage: "Full Coverage"
+    agent: "John Smith"
+    agent_phone: "(555) 555-1000"
+  registration:
+    expires: "2024-12-31"
+    renewal_fee: 175
+
+# Utilities
+utilities:
+  - provider: "PG&E"
+    service: "Gas & Electric"
+    account: "123456789"
+    avg_monthly: 120
+    address: "123 Oak Street, Apt 4B, San Francisco, CA 94102"
+  
+  - provider: "Comcast Xfinity"
+    service: "Internet & Cable"
+    account: "987654321"
+    avg_monthly: 85
+    plan: "Performance Pro Plus"
+    speed: "300 Mbps"
+  
+  - provider: "Verizon Wireless"
+    service: "Mobile Phone"
+    account: "VZW-555123456"
+    phone_number: "(555) 123-4567"
+    avg_monthly: 75
+    plan: "Unlimited Plus"
+
+# Credit cards
+credit_cards:
+  - issuer: "Chase Bank"
+    card_name: "Chase Sapphire Preferred"
+    last_four: "4567"
+    account: "4532-1234-5678-4567"
+    credit_limit: 15000
+    avg_monthly_spending: 1200
+    statement_day: 25
+  
+  - issuer: "American Express"
+    card_name: "Blue Cash Everyday"
+    last_four: "8901"
+    account: "3782-822463-18901"
+    credit_limit: 10000
+    avg_monthly_spending: 800
+    statement_day: 15
+
+# Employment
+employment:
+  employer: "TechStart Inc."
+  position: "Junior Software Engineer"
+  salary: 95000
+  start_date: "2024-01-15"
+  employee_id: "TS-2024-001"
+  address: "456 Tech Parkway, San Francisco, CA 94105"
+  hr_email: "hr@techstart.com"
+  manager: "Emily Chen"
+
+# Medical
+medical:
+  insurance:
+    provider: "Blue Shield of California"
+    policy_number: "BS-CA-2024-123456"
+    group_number: "GRP-TECHSTART-001"
+    monthly_premium: 250  # Employer subsidizes rest
+  primary_doctor:
+    name: "Dr. Robert Kim"
+    practice: "SF Family Medicine"
+    address: "789 Medical Plaza, San Francisco, CA 94102"
+    phone: "(415) 555-2000"
+
+# Subscriptions
+subscriptions:
+  - service: "Netflix"
+    monthly_cost: 15.99
+  - service: "Spotify Premium"
+    monthly_cost: 10.99
+  - service: "Amazon Prime"
+    monthly_cost: 14.99
+  - service: "LinkedIn Premium"
+    monthly_cost: 29.99
+
+# Tax information
+tax:
+  filing_status: "Single"
+  state_tax_id: "CA-123456789"
+  w2_employer: "TechStart Inc."
+  w2_ein: "12-3456789"
+  estimated_federal_withholding: 18000
+  estimated_state_withholding: 6000
+
+# Document generation preferences
+generation:
+  start_date: "2024-01-01"
+  end_date: "2024-12-31"
+  
+  # How many of each type to generate per month
+  monthly_documents:
+    rent_receipt: 1
+    pge_bill: 1
+    internet_bill: 1
+    phone_bill: 1
+    credit_card_statement: 2  # Two cards
+    insurance_bill: 1
+    junk_mail: 3  # Random promotional mail
+  
+  # Quarterly documents
+  quarterly_documents:
+    tuition_bill: 1
+    exam_schedule: 1
+  
+  # Annual documents
+  annual_documents:
+    w2_form: 1
+    vehicle_registration: 1
+    lease_renewal: 1
+    insurance_renewal: 1
+    tax_return: 1

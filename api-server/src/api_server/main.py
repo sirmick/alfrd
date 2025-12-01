@@ -491,6 +491,262 @@ async def get_document_file(document_id: str, filename: str, database: AlfrdData
         raise HTTPException(status_code=500, detail=f"Error serving file: {str(e)}")
 
 
+# ==========================================
+# FILE ENDPOINTS
+# ==========================================
+
+@app.post("/api/v1/files/create")
+async def create_file(
+    document_type: str = Query(..., description="Document type (e.g., 'bill', 'finance')"),
+    tags: List[str] = Query(..., description="Tags for the file"),
+    document_ids: List[str] = Query(..., description="Document UUIDs to add to file"),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    Create a new file and associate documents with it.
+    
+    Query Parameters:
+        - document_type: Type of documents in this file
+        - tags: List of tags defining the file
+        - document_ids: List of document UUIDs to include
+    
+    Returns:
+        Created file with generated summary
+    """
+    logger.info(f"POST /api/v1/files/create - type={document_type}, tags={tags}, docs={len(document_ids)}")
+    try:
+        # Generate file ID
+        file_id = uuid.uuid4()
+        
+        # Find or create file
+        file_record = await database.find_or_create_file(
+            file_id=file_id,
+            document_type=document_type,
+            tags=tags,
+            user_id=None  # TODO: Add user support
+        )
+        
+        # Add documents to file
+        for doc_id_str in document_ids:
+            try:
+                doc_uuid = UUID(doc_id_str)
+                await database.add_document_to_file(file_record['id'], doc_uuid)
+            except ValueError:
+                logger.warning(f"Invalid document ID: {doc_id_str}")
+        
+        # Mark file as outdated to trigger generation
+        await database.mark_file_outdated(file_record['id'])
+        
+        # Convert UUID to string for JSON
+        file_record['id'] = str(file_record['id'])
+        
+        return {
+            "file": file_record,
+            "message": "File created and queued for summary generation"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error creating file: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error creating file: {str(e)}")
+
+
+@app.get("/api/v1/files")
+async def list_files(
+    document_type: Optional[str] = Query(None, description="Filter by document type"),
+    tags: Optional[List[str]] = Query(None, description="Filter by tags (contains all)"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    List all files with optional filtering.
+    
+    Query Parameters:
+        - document_type: Filter by document type
+        - tags: Filter by tags (file must contain all specified tags)
+        - status: Filter by status (pending/generated/outdated)
+        - limit: Max number of results
+        - offset: Pagination offset
+    
+    Returns:
+        List of files with summaries
+    """
+    logger.info(f"GET /api/v1/files - type={document_type}, tags={tags}, status={status}")
+    try:
+        files = await database.list_files(
+            limit=limit,
+            offset=offset,
+            document_type=document_type,
+            tags=tags,
+            status=status,
+            user_id=None  # TODO: Add user support
+        )
+        
+        # Convert UUIDs to strings
+        for file in files:
+            file['id'] = str(file['id'])
+        
+        return {
+            "files": files,
+            "count": len(files),
+            "limit": limit,
+            "offset": offset
+        }
+    
+    except Exception as e:
+        logger.error(f"Error listing files: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error listing files: {str(e)}")
+
+
+@app.get("/api/v1/files/{file_id}")
+async def get_file(file_id: str, database: AlfrdDatabase = Depends(get_db)):
+    """
+    Get details for a specific file including summary and documents.
+    
+    Path Parameters:
+        - file_id: UUID of the file
+    
+    Returns:
+        File record with summary and list of documents
+    """
+    logger.info(f"GET /api/v1/files/{file_id}")
+    try:
+        # Parse UUID
+        try:
+            file_uuid = UUID(file_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid file ID format: {file_id}")
+        
+        # Get file record
+        file_record = await database.get_file(file_uuid)
+        
+        if not file_record:
+            raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+        
+        # Get documents in file
+        documents = await database.get_file_documents(file_uuid)
+        
+        # Convert UUIDs to strings
+        file_record['id'] = str(file_record['id'])
+        if file_record.get('prompt_version'):
+            file_record['prompt_version'] = str(file_record['prompt_version'])
+        
+        for doc in documents:
+            doc['id'] = str(doc['id'])
+        
+        return {
+            "file": file_record,
+            "documents": documents
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting file: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error getting file: {str(e)}")
+
+
+@app.post("/api/v1/files/{file_id}/regenerate")
+async def regenerate_file(file_id: str, database: AlfrdDatabase = Depends(get_db)):
+    """
+    Force regeneration of file summary.
+    
+    Path Parameters:
+        - file_id: UUID of the file
+    
+    Returns:
+        Status confirmation
+    """
+    logger.info(f"POST /api/v1/files/{file_id}/regenerate")
+    try:
+        # Parse UUID
+        try:
+            file_uuid = UUID(file_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid file ID format: {file_id}")
+        
+        # Check file exists
+        file_record = await database.get_file(file_uuid)
+        if not file_record:
+            raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+        
+        # Mark as outdated to trigger regeneration
+        await database.update_file(file_uuid, status='outdated')
+        
+        return {
+            "file_id": file_id,
+            "status": "queued",
+            "message": "File queued for regeneration"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error regenerating file: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error regenerating file: {str(e)}")
+
+
+@app.post("/api/v1/files/{file_id}/documents/{document_id}")
+async def add_document_to_file(
+    file_id: str,
+    document_id: str,
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    Add a document to an existing file.
+    
+    Path Parameters:
+        - file_id: UUID of the file
+        - document_id: UUID of the document to add
+    
+    Returns:
+        Status confirmation
+    """
+    logger.info(f"POST /api/v1/files/{file_id}/documents/{document_id}")
+    try:
+        # Parse UUIDs
+        try:
+            file_uuid = UUID(file_id)
+            doc_uuid = UUID(document_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {str(e)}")
+        
+        # Check file exists
+        file_record = await database.get_file(file_uuid)
+        if not file_record:
+            raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+        
+        # Check document exists
+        doc_record = await database.get_document(doc_uuid)
+        if not doc_record:
+            raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
+        
+        # Add document to file
+        await database.add_document_to_file(file_uuid, doc_uuid)
+        
+        # Mark file as outdated
+        await database.mark_file_outdated(file_uuid)
+        
+        return {
+            "file_id": file_id,
+            "document_id": document_id,
+            "status": "added",
+            "message": "Document added to file, summary will be regenerated"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error adding document to file: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error adding document to file: {str(e)}")
+
+
 def run_server():
     """Run the uvicorn server."""
     print(f"🚀 Starting esec API Server")
