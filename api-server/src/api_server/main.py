@@ -193,12 +193,64 @@ async def upload_image(file: UploadFile = File(...)):
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
     
+    # Create document record in database immediately
+    database = await get_db()
+    await database.create_document(
+        doc_id=UUID(doc_id),
+        filename=f"photo{ext}",
+        original_path=str(inbox_path),
+        file_type="image",
+        file_size=inbox_path.stat().st_size if inbox_path.exists() else 0,
+        status="pending",
+        folder_path=str(inbox_path)
+    )
+    
     return {
         "document_id": doc_id,
-        "status": "uploaded",
+        "status": "pending",
         "folder": folder_name,
         "message": "Document uploaded successfully and queued for processing"
     }
+
+
+@app.get("/api/v1/documents/search")
+async def search_documents(
+    q: str = Query(..., description="Search query string"),
+    limit: int = Query(50, ge=1, le=200, description="Number of results to return"),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    Full-text search across all documents.
+    
+    Query Parameters:
+        - q: Search query string (required)
+        - limit: Max number of results (1-200)
+    
+    Returns:
+        List of matching documents with relevance ranking
+    """
+    logger.info(f"GET /api/v1/documents/search - query={q}, limit={limit}")
+    try:
+        # Perform full-text search
+        results = await database.search_documents(q, limit=limit)
+        
+        logger.info(f"Search returned {len(results)} results")
+        
+        # Normalize data for JSON serialization
+        for doc in results:
+            if doc.get('id'):
+                doc['id'] = str(doc['id'])
+        
+        return {
+            "results": results,
+            "count": len(results),
+            "query": q
+        }
+    
+    except Exception as e:
+        logger.error(f"Error in search_documents: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Search error: {str(e)}")
 
 
 @app.get("/api/v1/documents")

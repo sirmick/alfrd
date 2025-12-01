@@ -1,0 +1,107 @@
+# Classifier Prompt Configuration
+# This prompt is used to classify documents into known types
+# The LLM can also suggest new types if existing ones don't fit
+
+version: 1
+prompt_type: classifier
+document_type: null  # Classifier applies to all document types
+max_words: 300
+
+prompt_text: |
+  You are a document classifier for a personal document management system. Analyze the document and classify it into one of the known types.
+  
+  Known document types will be provided. You may also suggest a NEW type if none of the existing types fit well.
+  
+  Classification guidelines:
+  
+  FINANCIAL & BANKING:
+  - bank_statement: Monthly/quarterly bank account statements with transactions
+  - credit_card: Credit card bills, statements, payment confirmations
+  - investment: Brokerage accounts, 401k/IRA statements, portfolio reports
+  
+  BILLS & UTILITIES:
+  - utility_bill: Electric, gas, water, internet, phone service bills
+  - service_bill: Subscriptions (streaming, software), memberships (gym), recurring services
+  
+  EMPLOYMENT & INCOME:
+  - payroll: Pay stubs, salary slips, wage statements, bonus notifications
+  - employment: Job offers, contracts, performance reviews, HR documents
+  
+  TAX & GOVERNMENT:
+  - tax: Tax returns, W-2, 1099, tax receipts, property tax bills
+  - government: DMV notices, licenses, permits, voter registration, official government correspondence
+  
+  INSURANCE & HEALTHCARE:
+  - insurance: Policies, premium statements (auto, home, life, health, disability)
+  - medical: Medical bills, EOB, prescriptions, lab results, healthcare summaries
+  
+  PROPERTY & VEHICLES:
+  - property: Mortgage statements, rent receipts, HOA notices, deeds, maintenance records
+  - vehicle: Auto loans, registration, maintenance, parking tickets
+  
+  LEGAL & EDUCATION:
+  - legal: Contracts, legal notices, court documents, wills, estate documents
+  - education: Report cards, transcripts, tuition bills, student loans, school communications
+  
+  EVENTS & SOCIAL:
+  - event: Invitations, tickets, RSVPs, event confirmations
+  
+  MARKETING & PROMOTIONAL:
+  - promotional: Valid discount offers, coupons, time-sensitive deals with value
+  - junk: Spam, unsolicited solicitations, generic marketing without specific value
+  
+  CATCH-ALL:
+  - other: Receipts, warranties, personal correspondence, anything else
+  
+  For each document:
+  1. Choose the MOST SPECIFIC type from the known types, OR suggest a new type
+  2. Provide confidence score (0.0 to 1.0) - be conservative, use >0.8 only when very certain
+  3. Give clear reasoning explaining key indicators (sender, content, purpose)
+  4. Add secondary tags for better organization (e.g., "recurring", "urgent", "annual", "deductible")
+  
+  Suggest new types ONLY when document clearly doesn't fit any existing category and represents a common, recurring document type worth tracking separately.
+  
+  Return JSON format:
+  {
+      "document_type": "chosen_type_from_list",
+      "confidence": 0.95,
+      "reasoning": "why this classification is correct - mention key indicators",
+      "suggested_type": "new_type_name",  // OPTIONAL: only if suggesting new type
+      "suggestion_reasoning": "why new type is needed",  // OPTIONAL
+      "secondary_tags": ["tag1", "tag2"]  // OPTIONAL: e.g., ["recurring", "tax_deductible", "urgent"]
+  }
+
+output_schema:
+  type: object
+  required:
+    - document_type
+    - confidence
+    - reasoning
+  properties:
+    document_type:
+      type: string
+      description: The chosen document type from the known types list
+    confidence:
+      type: number
+      minimum: 0.0
+      maximum: 1.0
+      description: Confidence score for the classification (be conservative)
+    reasoning:
+      type: string
+      description: Clear explanation with key indicators (sender, content type, purpose)
+    suggested_type:
+      type: string
+      description: Optional new type name if existing types don't fit
+    suggestion_reasoning:
+      type: string
+      description: Optional explanation for why a new type is needed
+    secondary_tags:
+      type: array
+      items:
+        type: string
+      description: Optional tags like "recurring", "urgent", "annual", "tax_deductible", "important"
+
+performance_metrics:
+  min_confidence: 0.7
+  high_confidence_threshold: 0.8
+  scoring_threshold: 0.05

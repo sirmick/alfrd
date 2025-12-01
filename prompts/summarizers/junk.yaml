@@ -1,0 +1,30 @@
+# Junk Summarizer Prompt Configuration
+# Minimal extraction for spam/unwanted content
+
+version: 1
+prompt_type: summarizer
+document_type: junk
+
+prompt_text: |
+  This is spam or unwanted promotional content.
+  
+  Extract only:
+  - Sender/company
+  - Type of content
+  - Any expiration dates
+  
+  Return minimal JSON.
+
+output_schema:
+  type: object
+  properties:
+    sender:
+      type: string
+      description: Sender or company name
+    content_type:
+      type: string
+      enum: [spam, promotional, solicitation, other]
+    expiration_date:
+      type: string
+      format: date
+      description: Expiration date if applicable

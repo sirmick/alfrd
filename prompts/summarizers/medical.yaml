@@ -1,0 +1,105 @@
+# Medical Summarizer Prompt Configuration
+# Extracts structured data from medical and healthcare documents
+
+version: 1
+prompt_type: summarizer
+document_type: medical
+
+prompt_text: |
+  Extract structured data from this medical or healthcare document.
+  
+  Focus on:
+  - Healthcare provider/facility name
+  - Patient name
+  - Document type (bill, EOB, prescription, lab result, etc.)
+  - Date of service
+  - Diagnosis/procedure codes
+  - Total charges
+  - Insurance payment
+  - Patient responsibility
+  - Prescription information (if applicable)
+  - Lab results (if applicable)
+  - Follow-up information
+  - Payment due date
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    provider:
+      type: string
+      description: Healthcare provider, facility, or pharmacy name
+    patient_name:
+      type: string
+      description: Patient name
+    document_subtype:
+      type: string
+      enum: [medical_bill, eob, prescription, lab_result, imaging_report, visit_summary, other]
+    date_of_service:
+      type: string
+      format: date
+      description: Date of medical service
+    diagnosis_codes:
+      type: array
+      items:
+        type: string
+      description: ICD-10 or diagnosis codes
+    procedure_codes:
+      type: array
+      items:
+        type: string
+      description: CPT or procedure codes
+    total_charges:
+      type: number
+      description: Total charges for services
+    insurance_payment:
+      type: number
+      description: Amount paid by insurance
+    patient_responsibility:
+      type: number
+      description: Amount patient owes
+    due_date:
+      type: string
+      format: date
+      description: Payment due date
+    prescription:
+      type: object
+      properties:
+        medication:
+          type: string
+        dosage:
+          type: string
+        quantity:
+          type: integer
+        refills:
+          type: integer
+        prescriber:
+          type: string
+    lab_results:
+      type: array
+      items:
+        type: object
+        properties:
+          test_name:
+            type: string
+          result:
+            type: string
+          reference_range:
+            type: string
+          flag:
+            type: string
+            enum: [normal, high, low, critical]
+    follow_up:
+      type: object
+      properties:
+        required:
+          type: boolean
+        date:
+          type: string
+          format: date
+        notes:
+          type: string
+    currency:
+      type: string
+      default: USD

@@ -1,0 +1,82 @@
+# Promotional Summarizer Prompt Configuration
+# Extracts structured data from promotional and discount documents
+
+version: 1
+prompt_type: summarizer
+document_type: promotional
+
+prompt_text: |
+  Extract structured data from this promotional or discount document.
+  
+  Focus on:
+  - Company/brand name
+  - Promotional offers and discounts
+  - Products/services featured
+  - Discount codes or coupons
+  - Validity period (start and end dates)
+  - Terms and conditions
+  - Minimum purchase requirements
+  - Contact information
+  - Store locations (if applicable)
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    company:
+      type: string
+      description: Company or brand name
+    offers:
+      type: array
+      items:
+        type: object
+        properties:
+          description:
+            type: string
+          discount:
+            type: string
+            description: Discount amount or percentage
+          code:
+            type: string
+            description: Promo or coupon code
+          minimum_purchase:
+            type: number
+            description: Minimum purchase amount required
+    products:
+      type: array
+      items:
+        type: string
+      description: Featured products or services
+    validity:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date
+        end:
+          type: string
+          format: date
+    terms:
+      type: array
+      items:
+        type: string
+      description: Terms and conditions
+    contact_info:
+      type: object
+      properties:
+        phone:
+          type: string
+        email:
+          type: string
+        website:
+          type: string
+    location:
+      type: object
+      properties:
+        address:
+          type: string
+        hours:
+          type: string
+        store_number:
+          type: string

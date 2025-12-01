@@ -1,0 +1,89 @@
+# Investment Summarizer Prompt Configuration
+# Extracts structured data from investment and retirement account statements
+
+version: 1
+prompt_type: summarizer
+document_type: investment
+
+prompt_text: |
+  Extract structured data from this investment or retirement account statement.
+  
+  Focus on:
+  - Financial institution/brokerage name
+  - Account number (last 4 digits)
+  - Account type (401k, IRA, Roth IRA, brokerage, etc.)
+  - Statement period
+  - Beginning value
+  - Ending value
+  - Contributions
+  - Withdrawals/distributions
+  - Investment gains/losses
+  - Dividends/interest
+  - Fees
+  - Asset allocation summary
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    institution:
+      type: string
+      description: Brokerage or financial institution name
+    account_last4:
+      type: string
+      description: Last 4 digits of account number
+    account_type:
+      type: string
+      enum: [401k, traditional_ira, roth_ira, brokerage, sep_ira, simple_ira, 403b, pension]
+    statement_period:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date
+        end:
+          type: string
+          format: date
+    beginning_value:
+      type: number
+      description: Account value at start of period
+    ending_value:
+      type: number
+      description: Account value at end of period
+    contributions:
+      type: number
+      description: Total contributions during period
+    withdrawals:
+      type: number
+      description: Total withdrawals/distributions
+    investment_gain_loss:
+      type: number
+      description: Net investment gain or loss
+    dividends:
+      type: number
+      description: Dividends earned
+    interest:
+      type: number
+      description: Interest earned
+    fees:
+      type: number
+      description: Account fees charged
+    asset_allocation:
+      type: object
+      properties:
+        stocks:
+          type: number
+          description: Percentage in stocks
+        bonds:
+          type: number
+          description: Percentage in bonds
+        cash:
+          type: number
+          description: Percentage in cash/money market
+        other:
+          type: number
+          description: Percentage in other assets
+    currency:
+      type: string
+      default: USD

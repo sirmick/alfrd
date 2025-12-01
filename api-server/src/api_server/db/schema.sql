@@ -208,17 +208,22 @@ CREATE INDEX IF NOT EXISTS idx_classification_suggestions_approved ON classifica
 CREATE INDEX IF NOT EXISTS idx_document_types_active ON document_types(is_active, usage_count DESC);
 
 -- Trigger to auto-update extracted_text_tsv for full-text search
+-- Includes both extracted text AND summary for better search results
 CREATE OR REPLACE FUNCTION update_extracted_text_tsv() RETURNS TRIGGER AS $$
 BEGIN
-    IF NEW.extracted_text IS NOT NULL THEN
-        NEW.extracted_text_tsv := to_tsvector('english', NEW.extracted_text);
+    -- Combine extracted_text and summary for comprehensive search
+    -- Summary weighted higher (setweight 'A') than body text (setweight 'B')
+    IF NEW.extracted_text IS NOT NULL OR NEW.summary IS NOT NULL THEN
+        NEW.extracted_text_tsv :=
+            setweight(to_tsvector('english', COALESCE(NEW.summary, '')), 'A') ||
+            setweight(to_tsvector('english', COALESCE(NEW.extracted_text, '')), 'B');
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER documents_extracted_text_tsv_update
-    BEFORE INSERT OR UPDATE OF extracted_text ON documents
+    BEFORE INSERT OR UPDATE OF extracted_text, summary ON documents
     FOR EACH ROW
     EXECUTE FUNCTION update_extracted_text_tsv();
 

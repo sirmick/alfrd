@@ -1,0 +1,108 @@
+# Document Types Configuration
+# Comprehensive set of 18 document types covering middle-class daily life
+
+document_types:
+  # Financial & Banking
+  - type_name: bank_statement
+    description: Bank account statements, transaction history, balance reports
+    is_active: true
+    usage_count: 0
+    
+  - type_name: credit_card
+    description: Credit card statements, payment confirmations, account summaries
+    is_active: true
+    usage_count: 0
+    
+  - type_name: investment
+    description: Investment statements, portfolio reports, brokerage account documents, retirement account statements (401k, IRA)
+    is_active: true
+    usage_count: 0
+  
+  # Bills & Utilities
+  - type_name: utility_bill
+    description: Electric, gas, water, internet, phone bills and statements
+    is_active: true
+    usage_count: 0
+    
+  - type_name: service_bill
+    description: Subscription services, membership fees, recurring service charges (streaming, software, gym, etc.)
+    is_active: true
+    usage_count: 0
+  
+  # Employment & Income
+  - type_name: payroll
+    description: Pay stubs, salary statements, wage slips, bonus notifications
+    is_active: true
+    usage_count: 0
+    
+  - type_name: employment
+    description: Offer letters, employment contracts, performance reviews, HR documents
+    is_active: true
+    usage_count: 0
+  
+  # Tax & Government
+  - type_name: tax
+    description: Tax returns, W-2 forms, 1099 forms, tax receipts, property tax bills
+    is_active: true
+    usage_count: 0
+    
+  - type_name: government
+    description: Government notices, DMV documents, voter registration, permits, licenses
+    is_active: true
+    usage_count: 0
+  
+  # Insurance & Healthcare
+  - type_name: insurance
+    description: Insurance policies, premium statements, coverage documents (auto, home, life, disability)
+    is_active: true
+    usage_count: 0
+    
+  - type_name: medical
+    description: Medical bills, EOB (Explanation of Benefits), prescription receipts, lab results, healthcare summaries
+    is_active: true
+    usage_count: 0
+  
+  # Property & Vehicles
+  - type_name: property
+    description: Mortgage statements, rent receipts, HOA notices, property deeds, home maintenance records
+    is_active: true
+    usage_count: 0
+    
+  - type_name: vehicle
+    description: Auto loan statements, vehicle registration, maintenance records, parking tickets, DMV notices
+    is_active: true
+    usage_count: 0
+  
+  # Legal & Education
+  - type_name: legal
+    description: Contracts, legal notices, court documents, wills, power of attorney
+    is_active: true
+    usage_count: 0
+    
+  - type_name: education
+    description: Report cards, transcripts, tuition bills, student loan statements, school communications
+    is_active: true
+    usage_count: 0
+
+  # Events & Social
+  - type_name: event
+    description: Event invitations, tickets, confirmations, RSVPs, venue information
+    is_active: true
+    usage_count: 0
+
+  # Marketing & Promotional
+  - type_name: promotional
+    description: Discount offers, coupons, promotional materials with valid offers or time-sensitive deals
+    is_active: true
+    usage_count: 0
+
+  - type_name: junk
+    description: Spam, unwanted solicitations, unsolicited marketing without value
+    is_active: true
+    usage_count: 0
+
+  # Catch-all
+  - type_name: other
+    description: Miscellaneous documents that don't fit other categories - receipts, warranties, personal correspondence
+    is_active: true
+    usage_count: 0

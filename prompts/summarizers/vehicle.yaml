@@ -1,0 +1,113 @@
+# Vehicle Summarizer Prompt Configuration
+# Extracts structured data from vehicle-related documents
+
+version: 1
+prompt_type: summarizer
+document_type: vehicle
+
+prompt_text: |
+  Extract structured data from this vehicle-related document.
+  
+  Focus on:
+  - Vehicle make, model, year
+  - VIN (last 6 digits)
+  - Document type (auto loan, registration, maintenance, ticket, etc.)
+  - Owner name
+  - License plate number
+  - Registration expiration
+  - Loan/payment information
+  - Service/maintenance details
+  - Ticket/violation information
+  - Amount due (if applicable)
+  - Due dates
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    vehicle_info:
+      type: object
+      properties:
+        make:
+          type: string
+        model:
+          type: string
+        year:
+          type: integer
+        vin_last6:
+          type: string
+          description: Last 6 digits of VIN
+        license_plate:
+          type: string
+    document_subtype:
+      type: string
+      enum: [auto_loan, registration, insurance_card, maintenance, repair, ticket, parking_violation, inspection, title, other]
+    owner_name:
+      type: string
+      description: Vehicle owner name
+    registration:
+      type: object
+      properties:
+        issue_date:
+          type: string
+          format: date
+        expiration_date:
+          type: string
+          format: date
+        fee:
+          type: number
+    loan_details:
+      type: object
+      properties:
+        lender:
+          type: string
+        account_number:
+          type: string
+        payment_amount:
+          type: number
+        due_date:
+          type: string
+          format: date
+        balance:
+          type: number
+        interest_rate:
+          type: number
+    maintenance:
+      type: object
+      properties:
+        service_provider:
+          type: string
+        service_date:
+          type: string
+          format: date
+        mileage:
+          type: integer
+        services_performed:
+          type: array
+          items:
+            type: string
+        cost:
+          type: number
+        next_service_due:
+          type: string
+    ticket_violation:
+      type: object
+      properties:
+        issuing_agency:
+          type: string
+        violation_date:
+          type: string
+          format: date
+        violation_type:
+          type: string
+        fine_amount:
+          type: number
+        due_date:
+          type: string
+          format: date
+        citation_number:
+          type: string
+    currency:
+      type: string
+      default: USD

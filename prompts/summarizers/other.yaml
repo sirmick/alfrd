@@ -1,0 +1,59 @@
+# Other Summarizer Prompt Configuration
+# Catch-all for extracting key information from unknown document types
+
+version: 1
+prompt_type: summarizer
+document_type: other
+
+prompt_text: |
+  Extract key information from this document.
+  
+  Identify and extract:
+  - Document type/purpose
+  - Main parties involved
+  - Important dates
+  - Key amounts or values
+  - Critical information
+  
+  Return JSON with all relevant fields.
+
+output_schema:
+  type: object
+  properties:
+    document_purpose:
+      type: string
+      description: What is this document for?
+    parties:
+      type: array
+      items:
+        type: object
+        properties:
+          name:
+            type: string
+          role:
+            type: string
+    important_dates:
+      type: array
+      items:
+        type: object
+        properties:
+          description:
+            type: string
+          date:
+            type: string
+            format: date
+    amounts:
+      type: array
+      items:
+        type: object
+        properties:
+          description:
+            type: string
+          value:
+            type: number
+          currency:
+            type: string
+    key_information:
+      type: array
+      items:
+        type: string

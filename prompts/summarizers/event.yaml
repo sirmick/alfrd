@@ -1,0 +1,79 @@
+# Event Summarizer Prompt Configuration
+# Extracts structured data from event documents
+
+version: 1
+prompt_type: summarizer
+document_type: event
+
+prompt_text: |
+  Extract structured data from this event document.
+  
+  Focus on:
+  - Event name
+  - Date and time
+  - Location/venue
+  - Organizer
+  - Cost/tickets
+  - Registration deadline
+  - Contact information
+  - Important notes
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    event_name:
+      type: string
+      description: Name of the event
+    date:
+      type: string
+      format: date
+      description: Event date
+    time:
+      type: string
+      description: Event time
+    location:
+      type: object
+      properties:
+        venue:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        state:
+          type: string
+        zip:
+          type: string
+    organizer:
+      type: string
+      description: Event organizer or host
+    cost:
+      type: object
+      properties:
+        amount:
+          type: number
+        currency:
+          type: string
+          default: USD
+        ticket_type:
+          type: string
+    registration_deadline:
+      type: string
+      format: date
+      description: Deadline to register or RSVP
+    contact_info:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        website:
+          type: string
+    notes:
+      type: string
+      description: Important additional information

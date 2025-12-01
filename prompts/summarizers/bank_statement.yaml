@@ -1,0 +1,70 @@
+# Bank Statement Summarizer Prompt Configuration
+# Extracts structured data from bank account statements
+
+version: 1
+prompt_type: summarizer
+document_type: bank_statement
+
+prompt_text: |
+  Extract structured financial data from this bank account statement.
+  
+  Focus on:
+  - Financial institution name
+  - Account number (last 4 digits)
+  - Account type (checking, savings, money market)
+  - Statement period (start and end dates)
+  - Beginning balance
+  - Ending balance
+  - Total deposits/credits
+  - Total withdrawals/debits
+  - Interest earned
+  - Fees charged
+  - Number of transactions
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    institution:
+      type: string
+      description: Bank or financial institution name
+    account_number_last4:
+      type: string
+      description: Last 4 digits of account number
+    account_type:
+      type: string
+      enum: [checking, savings, money_market]
+    statement_period:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date
+        end:
+          type: string
+          format: date
+    beginning_balance:
+      type: number
+      description: Balance at start of statement period
+    ending_balance:
+      type: number
+      description: Balance at end of statement period
+    total_deposits:
+      type: number
+      description: Sum of all deposits/credits
+    total_withdrawals:
+      type: number
+      description: Sum of all withdrawals/debits
+    interest_earned:
+      type: number
+      description: Interest earned during period
+    fees_charged:
+      type: number
+      description: Total fees charged
+    transaction_count:
+      type: integer
+      description: Total number of transactions
+    currency:
+      type: string
+      default: USD

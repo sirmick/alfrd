@@ -1,0 +1,82 @@
+# Employment Summarizer Prompt Configuration
+# Extracts structured data from employment documents
+
+version: 1
+prompt_type: summarizer
+document_type: employment
+
+prompt_text: |
+  Extract structured data from this employment document.
+  
+  Focus on:
+  - Employer/company name
+  - Employee name
+  - Document type (offer letter, contract, performance review, etc.)
+  - Position/job title
+  - Department
+  - Start date (for offers)
+  - Salary/compensation
+  - Benefits summary
+  - Employment type (full-time, part-time, contract)
+  - Review period/date (for performance reviews)
+  - Key terms or conditions
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    employer:
+      type: string
+      description: Company or organization name
+    employee_name:
+      type: string
+      description: Employee name
+    document_subtype:
+      type: string
+      enum: [offer_letter, employment_contract, performance_review, promotion, termination, hr_notice, other]
+    position:
+      type: string
+      description: Job title or position
+    department:
+      type: string
+      description: Department or division
+    start_date:
+      type: string
+      format: date
+      description: Employment start date
+    salary:
+      type: object
+      properties:
+        amount:
+          type: number
+        frequency:
+          type: string
+          enum: [hourly, annual, monthly, weekly]
+        currency:
+          type: string
+          default: USD
+    benefits:
+      type: array
+      items:
+        type: string
+      description: List of benefits (health insurance, 401k, PTO, etc.)
+    employment_type:
+      type: string
+      enum: [full_time, part_time, contract, temporary, intern]
+    review_date:
+      type: string
+      format: date
+      description: Performance review date (if applicable)
+    rating:
+      type: string
+      description: Performance rating (if applicable)
+    effective_date:
+      type: string
+      format: date
+      description: Effective date of document
+    key_terms:
+      type: array
+      items:
+        type: string
+      description: Important terms or conditions

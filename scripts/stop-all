@@ -1,0 +1,23 @@
+#!/bin/bash
+# Stop all ALFRD services running in screen sessions
+
+echo "🛑 Stopping ALFRD services..."
+echo
+
+# Kill screen sessions
+sessions=("alfrd-api" "alfrd-processor" "alfrd-webui")
+
+for session in "${sessions[@]}"; do
+    if screen -ls | grep -q "$session"; then
+        echo "   Stopping $session..."
+        screen -S "$session" -X quit
+    else
+        echo "   ⚠️  $session not running"
+    fi
+done
+
+echo
+echo "✅ All services stopped"
+echo
+echo "📋 Remaining screen sessions:"
+screen -ls 2>/dev/null || echo "   None"

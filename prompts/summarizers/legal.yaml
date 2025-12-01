@@ -1,0 +1,97 @@
+# Legal Summarizer Prompt Configuration
+# Extracts structured data from legal documents
+
+version: 1
+prompt_type: summarizer
+document_type: legal
+
+prompt_text: |
+  Extract structured data from this legal document.
+  
+  Focus on:
+  - Document type (contract, agreement, will, power of attorney, court notice, etc.)
+  - Parties involved (names and roles)
+  - Effective date
+  - Expiration/termination date
+  - Key terms and obligations
+  - Payment terms (if applicable)
+  - Important deadlines
+  - Jurisdiction
+  - Attorney/law firm information
+  - Case number (for court documents)
+  - Required actions
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    document_subtype:
+      type: string
+      enum: [contract, agreement, will, trust, power_of_attorney, court_notice, settlement, divorce_decree, lease, deed, other]
+    parties:
+      type: array
+      items:
+        type: object
+        properties:
+          name:
+            type: string
+          role:
+            type: string
+            description: Role (plaintiff, defendant, buyer, seller, grantor, etc.)
+    effective_date:
+      type: string
+      format: date
+      description: Contract/document effective date
+    expiration_date:
+      type: string
+      format: date
+      description: Contract expiration or termination date
+    key_terms:
+      type: array
+      items:
+        type: string
+      description: Important terms and obligations
+    payment_terms:
+      type: object
+      properties:
+        amount:
+          type: number
+        frequency:
+          type: string
+        due_date:
+          type: string
+          format: date
+    deadlines:
+      type: array
+      items:
+        type: object
+        properties:
+          description:
+            type: string
+          date:
+            type: string
+            format: date
+    jurisdiction:
+      type: string
+      description: State or jurisdiction
+    attorney_info:
+      type: object
+      properties:
+        name:
+          type: string
+        firm:
+          type: string
+        phone:
+          type: string
+    case_number:
+      type: string
+      description: Court case number (if applicable)
+    required_actions:
+      type: array
+      items:
+        type: string
+      description: Actions required by parties
+    currency:
+      type: string
+      default: USD

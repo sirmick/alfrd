@@ -1,0 +1,99 @@
+# Insurance Summarizer Prompt Configuration
+# Extracts structured data from insurance documents
+
+version: 1
+prompt_type: summarizer
+document_type: insurance
+
+prompt_text: |
+  Extract structured data from this insurance document.
+  
+  Focus on:
+  - Insurance company name
+  - Policy type (auto, home, life, health, disability, etc.)
+  - Policy number
+  - Policyholder name
+  - Coverage period (effective and expiration dates)
+  - Premium amount
+  - Payment frequency
+  - Coverage limits
+  - Deductibles
+  - Beneficiaries (for life insurance)
+  - Covered items/property (for auto/home)
+  - Important terms or exclusions
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    insurance_company:
+      type: string
+      description: Insurance company or provider name
+    policy_type:
+      type: string
+      enum: [auto, home, renters, life, health, disability, dental, vision, umbrella, other]
+    policy_number:
+      type: string
+      description: Policy number
+    policyholder_name:
+      type: string
+      description: Policyholder name
+    coverage_period:
+      type: object
+      properties:
+        effective_date:
+          type: string
+          format: date
+        expiration_date:
+          type: string
+          format: date
+    premium:
+      type: object
+      properties:
+        amount:
+          type: number
+        frequency:
+          type: string
+          enum: [monthly, quarterly, semi_annual, annual]
+        due_date:
+          type: string
+          format: date
+    coverage_limits:
+      type: object
+      properties:
+        liability:
+          type: number
+        property:
+          type: number
+        medical:
+          type: number
+        other:
+          type: number
+    deductible:
+      type: number
+      description: Deductible amount
+    beneficiaries:
+      type: array
+      items:
+        type: object
+        properties:
+          name:
+            type: string
+          relationship:
+            type: string
+          percentage:
+            type: number
+    covered_items:
+      type: array
+      items:
+        type: string
+      description: Covered vehicles, properties, or items
+    key_terms:
+      type: array
+      items:
+        type: string
+      description: Important terms or exclusions
+    currency:
+      type: string
+      default: USD

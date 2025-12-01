@@ -1,0 +1,84 @@
+# Utility Bill Summarizer Prompt Configuration
+# Extracts structured data from utility bills (electric, gas, water, internet, phone)
+
+version: 1
+prompt_type: summarizer
+document_type: utility_bill
+
+prompt_text: |
+  Extract structured data from this utility bill.
+  
+  Focus on:
+  - Utility provider/company name
+  - Utility type (electric, gas, water, internet, phone)
+  - Account number
+  - Service address
+  - Statement/billing period
+  - Statement date
+  - Due date
+  - Current charges
+  - Previous balance
+  - Total amount due
+  - Usage/consumption (kWh, therms, gallons, GB, minutes)
+  - Rate/tariff information
+  - Late payment fee (if applicable)
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    provider:
+      type: string
+      description: Utility company name
+    utility_type:
+      type: string
+      enum: [electric, gas, water, sewer, internet, phone, cable, trash]
+    account_number:
+      type: string
+      description: Account number (may be partially masked)
+    service_address:
+      type: string
+      description: Service location address
+    billing_period:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date
+        end:
+          type: string
+          format: date
+    statement_date:
+      type: string
+      format: date
+    due_date:
+      type: string
+      format: date
+      description: Payment due date
+    current_charges:
+      type: number
+      description: Charges for current billing period
+    previous_balance:
+      type: number
+      description: Previous balance carried forward
+    total_amount_due:
+      type: number
+      description: Total amount due
+    usage:
+      type: object
+      properties:
+        amount:
+          type: number
+        unit:
+          type: string
+          description: Unit of measurement (kWh, therms, gallons, GB, etc.)
+    rate:
+      type: number
+      description: Rate per unit
+    late_fee:
+      type: number
+      description: Late payment fee if applicable
+    currency:
+      type: string
+      default: USD

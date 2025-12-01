@@ -1,0 +1,66 @@
+#!/bin/bash
+# Start all ALFRD services in separate screen sessions
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$PROJECT_ROOT" || exit 1
+
+# Activate venv if it exists
+if [ -d "venv/bin" ]; then
+    source venv/bin/activate
+fi
+
+# Check if screen is installed
+if ! command -v screen &> /dev/null; then
+    echo "❌ Error: 'screen' is not installed."
+    echo "Install it with: sudo apt install screen  # or brew install screen"
+    exit 1
+fi
+
+# Check if PostgreSQL is running
+if ! pg_isready -h /var/run/postgresql &> /dev/null; then
+    echo "⚠️  Warning: PostgreSQL is not running"
+    echo "Start it with: brew services start postgresql@15  # or sudo systemctl start postgresql"
+    read -p "Continue anyway? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+echo "🚀 Starting ALFRD services in screen sessions..."
+echo
+
+# Start API server
+echo "📡 Starting API Server (screen: alfrd-api)..."
+screen -dmS alfrd-api bash -c "cd '$PROJECT_ROOT' && source venv/bin/activate 2>/dev/null; ./scripts/start-api"
+sleep 1
+
+# Start document processor
+echo "⚙️  Starting Document Processor (screen: alfrd-processor)..."
+screen -dmS alfrd-processor bash -c "cd '$PROJECT_ROOT' && source venv/bin/activate 2>/dev/null; ./scripts/start-processor"
+sleep 1
+
+# Start web UI
+echo "🌐 Starting Web UI (screen: alfrd-webui)..."
+screen -dmS alfrd-webui bash -c "cd '$PROJECT_ROOT/web-ui' && npm run dev"
+sleep 2
+
+echo
+echo "✅ All services started!"
+echo
+echo "📋 Screen sessions:"
+screen -ls | grep alfrd
+echo
+echo "🔗 Services:"
+echo "   API Server:  http://localhost:8000"
+echo "   Web UI:      http://localhost:5173"
+echo
+echo "📺 View logs:"
+echo "   screen -r alfrd-api         # API server logs"
+echo "   screen -r alfrd-processor   # Processor logs"
+echo "   screen -r alfrd-webui       # Web UI logs"
+echo
+echo "⌨️  Detach from screen: Ctrl+A then D"
+echo "🛑 Stop all services: ./scripts/stop-all"

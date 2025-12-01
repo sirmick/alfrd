@@ -1,0 +1,76 @@
+# Tax Summarizer Prompt Configuration
+# Extracts structured data from tax documents
+
+version: 1
+prompt_type: summarizer
+document_type: tax
+
+prompt_text: |
+  Extract structured data from this tax document.
+  
+  Focus on:
+  - Tax year
+  - Document type (W-2, 1099, tax return, property tax, etc.)
+  - Taxpayer name
+  - SSN/EIN (last 4 digits only)
+  - Employer/payer (for W-2, 1099)
+  - Wages/income
+  - Federal tax withheld
+  - State tax withheld
+  - Tax owed or refund amount
+  - Filing status
+  - Property tax amount (if property tax bill)
+  - Important dates (filing deadline, payment due)
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    tax_year:
+      type: integer
+      description: Tax year (e.g., 2024)
+    document_subtype:
+      type: string
+      enum: [w2, 1099_misc, 1099_int, 1099_div, 1099_r, tax_return, property_tax, estimated_tax, other]
+    taxpayer_name:
+      type: string
+      description: Taxpayer name
+    ssn_last4:
+      type: string
+      description: Last 4 digits of SSN/EIN
+    employer_payer:
+      type: string
+      description: Employer or payer name
+    wages_income:
+      type: number
+      description: Total wages or income reported
+    federal_tax_withheld:
+      type: number
+      description: Federal income tax withheld
+    state_tax_withheld:
+      type: number
+      description: State income tax withheld
+    tax_owed:
+      type: number
+      description: Tax amount owed (if applicable)
+    refund_amount:
+      type: number
+      description: Refund amount (if applicable)
+    filing_status:
+      type: string
+      enum: [single, married_filing_jointly, married_filing_separately, head_of_household, qualifying_widow]
+    property_tax_amount:
+      type: number
+      description: Property tax amount (if property tax bill)
+    due_date:
+      type: string
+      format: date
+      description: Payment or filing due date
+    filing_deadline:
+      type: string
+      format: date
+      description: Tax return filing deadline
+    currency:
+      type: string
+      default: USD

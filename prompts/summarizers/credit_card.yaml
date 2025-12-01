@@ -1,0 +1,87 @@
+# Credit Card Summarizer Prompt Configuration
+# Extracts structured data from credit card statements
+
+version: 1
+prompt_type: summarizer
+document_type: credit_card
+
+prompt_text: |
+  Extract structured data from this credit card statement.
+  
+  Focus on:
+  - Credit card issuer/bank name
+  - Card account number (last 4 digits)
+  - Statement period
+  - Previous balance
+  - New balance
+  - Minimum payment due
+  - Payment due date
+  - Credit limit
+  - Available credit
+  - Total purchases
+  - Total payments
+  - Interest charges
+  - Fees charged
+  - Rewards earned
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    issuer:
+      type: string
+      description: Credit card issuer or bank name
+    account_last4:
+      type: string
+      description: Last 4 digits of card number
+    statement_period:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date
+        end:
+          type: string
+          format: date
+    previous_balance:
+      type: number
+      description: Balance from previous statement
+    new_balance:
+      type: number
+      description: Current balance
+    minimum_payment:
+      type: number
+      description: Minimum payment due
+    payment_due_date:
+      type: string
+      format: date
+      description: Payment due date
+    credit_limit:
+      type: number
+      description: Total credit limit
+    available_credit:
+      type: number
+      description: Available credit remaining
+    total_purchases:
+      type: number
+      description: Sum of all purchases this period
+    total_payments:
+      type: number
+      description: Sum of all payments received
+    interest_charged:
+      type: number
+      description: Interest charges for the period
+    fees_charged:
+      type: number
+      description: Total fees (late, annual, etc.)
+    rewards_earned:
+      type: object
+      properties:
+        points:
+          type: number
+        cash_back:
+          type: number
+    currency:
+      type: string
+      default: USD

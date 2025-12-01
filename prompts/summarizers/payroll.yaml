@@ -1,0 +1,104 @@
+# Payroll Summarizer Prompt Configuration
+# Extracts structured data from pay stubs and salary statements
+
+version: 1
+prompt_type: summarizer
+document_type: payroll
+
+prompt_text: |
+  Extract structured data from this pay stub or salary statement.
+  
+  Focus on:
+  - Employer name
+  - Employee name
+  - Employee ID
+  - Pay period (start and end dates)
+  - Pay date
+  - Gross pay
+  - Net pay
+  - Federal tax withheld
+  - State tax withheld
+  - Social Security tax
+  - Medicare tax
+  - Other deductions (401k, health insurance, etc.)
+  - Year-to-date totals
+  - Hours worked (if applicable)
+  - Pay rate/salary
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    employer:
+      type: string
+      description: Employer/company name
+    employee_name:
+      type: string
+      description: Employee name
+    employee_id:
+      type: string
+      description: Employee ID number
+    pay_period:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date
+        end:
+          type: string
+          format: date
+    pay_date:
+      type: string
+      format: date
+      description: Date of payment
+    gross_pay:
+      type: number
+      description: Gross pay before deductions
+    net_pay:
+      type: number
+      description: Net pay (take-home)
+    federal_tax:
+      type: number
+      description: Federal income tax withheld
+    state_tax:
+      type: number
+      description: State income tax withheld
+    social_security:
+      type: number
+      description: Social Security tax
+    medicare:
+      type: number
+      description: Medicare tax
+    deductions:
+      type: array
+      items:
+        type: object
+        properties:
+          category:
+            type: string
+            description: Deduction type (401k, health insurance, dental, etc.)
+          amount:
+            type: number
+    ytd_totals:
+      type: object
+      properties:
+        gross:
+          type: number
+        federal_tax:
+          type: number
+        state_tax:
+          type: number
+        social_security:
+          type: number
+        medicare:
+          type: number
+    hours_worked:
+      type: number
+      description: Hours worked this pay period
+    pay_rate:
+      type: number
+      description: Hourly rate or salary
+    currency:
+      type: string
+      default: USD

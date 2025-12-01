@@ -1,0 +1,16 @@
+#!/bin/bash
+# Restart all ALFRD services
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+echo "🔄 Restarting ALFRD services..."
+echo
+
+# Stop all services
+"$SCRIPT_DIR/stop-all"
+
+# Wait a moment for clean shutdown
+sleep 2
+
+# Start all services
+"$SCRIPT_DIR/start-all"

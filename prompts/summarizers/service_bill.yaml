@@ -1,0 +1,76 @@
+# Service Bill Summarizer Prompt Configuration
+# Extracts structured data from subscription and service bills
+
+version: 1
+prompt_type: summarizer
+document_type: service_bill
+
+prompt_text: |
+  Extract structured data from this subscription or service bill.
+  
+  Focus on:
+  - Service provider/company name
+  - Service type (streaming, software, gym, membership, etc.)
+  - Account/membership number
+  - Billing period
+  - Statement date
+  - Due date
+  - Current charges
+  - Subscription plan/tier
+  - Renewal date
+  - Total amount due
+  - Payment method (if visible)
+  - Auto-renewal status
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    provider:
+      type: string
+      description: Service provider or company name
+    service_type:
+      type: string
+      enum: [streaming, software, saas, gym, membership, cloud_storage, gaming, music, other]
+    account_number:
+      type: string
+      description: Account or membership number
+    billing_period:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date
+        end:
+          type: string
+          format: date
+    statement_date:
+      type: string
+      format: date
+    due_date:
+      type: string
+      format: date
+      description: Payment due date
+    current_charges:
+      type: number
+      description: Charges for current period
+    total_amount_due:
+      type: number
+      description: Total amount due
+    subscription_plan:
+      type: string
+      description: Plan name or tier (Basic, Premium, Family, etc.)
+    renewal_date:
+      type: string
+      format: date
+      description: Next renewal date
+    billing_frequency:
+      type: string
+      enum: [monthly, quarterly, annual, other]
+    auto_renewal:
+      type: boolean
+      description: Whether auto-renewal is enabled
+    currency:
+      type: string
+      default: USD

@@ -1,0 +1,88 @@
+# Government Summarizer Prompt Configuration
+# Extracts structured data from government documents
+
+version: 1
+prompt_type: summarizer
+document_type: government
+
+prompt_text: |
+  Extract structured data from this government document.
+  
+  Focus on:
+  - Issuing agency/department
+  - Document type (license, permit, notice, registration, etc.)
+  - Recipient name
+  - ID/reference number
+  - Issue date
+  - Expiration date
+  - Fee/cost
+  - Requirements or conditions
+  - Renewal information
+  - Contact information
+  - Important deadlines
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    agency:
+      type: string
+      description: Government agency or department name
+    document_subtype:
+      type: string
+      enum: [drivers_license, vehicle_registration, permit, license, voter_registration, passport, birth_certificate, tax_notice, court_notice, other]
+    recipient_name:
+      type: string
+      description: Name of person or entity
+    reference_number:
+      type: string
+      description: ID, license, or reference number
+    issue_date:
+      type: string
+      format: date
+      description: Date issued
+    expiration_date:
+      type: string
+      format: date
+      description: Expiration date (if applicable)
+    fee:
+      type: number
+      description: Fee or cost
+    requirements:
+      type: array
+      items:
+        type: string
+      description: Requirements or conditions
+    renewal_info:
+      type: object
+      properties:
+        renewal_date:
+          type: string
+          format: date
+        renewal_fee:
+          type: number
+        renewal_method:
+          type: string
+    contact_info:
+      type: object
+      properties:
+        phone:
+          type: string
+        website:
+          type: string
+        address:
+          type: string
+    deadlines:
+      type: array
+      items:
+        type: object
+        properties:
+          description:
+            type: string
+          date:
+            type: string
+            format: date
+    currency:
+      type: string
+      default: USD

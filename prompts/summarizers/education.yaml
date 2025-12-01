@@ -1,0 +1,114 @@
+# Education Summarizer Prompt Configuration
+# Extracts structured data from education documents
+
+version: 1
+prompt_type: summarizer
+document_type: education
+
+prompt_text: |
+  Extract structured data from this education document.
+  
+  Focus on:
+  - School/institution name
+  - Student name
+  - Document type (report card, transcript, tuition bill, student loan, etc.)
+  - Academic period (semester, quarter, year)
+  - Date/academic period
+  - Grades or performance metrics
+  - Tuition/fees (if applicable)
+  - Student loan information (if applicable)
+  - Important deadlines
+  - Contact information
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    institution:
+      type: string
+      description: School or institution name
+    student_name:
+      type: string
+      description: Student name (if present)
+    document_subtype:
+      type: string
+      enum: [report_card, transcript, tuition_bill, student_loan, permission_slip, notice, event, scholarship, financial_aid, other]
+    date:
+      type: string
+      format: date
+      description: Document date
+    academic_period:
+      type: object
+      properties:
+        year:
+          type: string
+        term:
+          type: string
+          enum: [fall, winter, spring, summer, quarter_1, quarter_2, quarter_3, quarter_4, semester_1, semester_2]
+    grades:
+      type: array
+      items:
+        type: object
+        properties:
+          subject:
+            type: string
+          grade:
+            type: string
+          credits:
+            type: number
+          comments:
+            type: string
+    gpa:
+      type: number
+      description: Grade point average
+    tuition_fees:
+      type: object
+      properties:
+        tuition:
+          type: number
+        fees:
+          type: number
+        total:
+          type: number
+        due_date:
+          type: string
+          format: date
+    student_loan:
+      type: object
+      properties:
+        lender:
+          type: string
+        loan_type:
+          type: string
+          enum: [federal, private, subsidized, unsubsidized, parent_plus, grad_plus]
+        principal:
+          type: number
+        interest_rate:
+          type: number
+        monthly_payment:
+          type: number
+        balance:
+          type: number
+    deadlines:
+      type: array
+      items:
+        type: object
+        properties:
+          description:
+            type: string
+          date:
+            type: string
+            format: date
+    contact_info:
+      type: object
+      properties:
+        name:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+    currency:
+      type: string
+      default: USD

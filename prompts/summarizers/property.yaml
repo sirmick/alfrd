@@ -1,0 +1,94 @@
+# Property Summarizer Prompt Configuration
+# Extracts structured data from property-related documents
+
+version: 1
+prompt_type: summarizer
+document_type: property
+
+prompt_text: |
+  Extract structured data from this property-related document.
+  
+  Focus on:
+  - Property address
+  - Document type (mortgage statement, rent receipt, HOA notice, deed, etc.)
+  - Lender/landlord/HOA name
+  - Account/reference number
+  - Payment amount
+  - Due date
+  - Property tax information
+  - Interest rate (for mortgages)
+  - Principal and interest breakdown
+  - Escrow information
+  - Outstanding balance
+  - Important dates or deadlines
+  
+  Return JSON with all available fields.
+
+output_schema:
+  type: object
+  properties:
+    property_address:
+      type: string
+      description: Property address
+    document_subtype:
+      type: string
+      enum: [mortgage_statement, rent_receipt, hoa_notice, property_deed, maintenance_record, appraisal, insurance_claim, other]
+    entity_name:
+      type: string
+      description: Lender, landlord, or HOA name
+    account_number:
+      type: string
+      description: Account or reference number
+    payment_amount:
+      type: number
+      description: Payment amount due
+    due_date:
+      type: string
+      format: date
+      description: Payment due date
+    mortgage_details:
+      type: object
+      properties:
+        principal_balance:
+          type: number
+        interest_rate:
+          type: number
+        monthly_payment:
+          type: number
+        principal_portion:
+          type: number
+        interest_portion:
+          type: number
+        escrow_portion:
+          type: number
+    escrow_account:
+      type: object
+      properties:
+        balance:
+          type: number
+        property_tax:
+          type: number
+        homeowners_insurance:
+          type: number
+    hoa_fees:
+      type: number
+      description: HOA fees (if applicable)
+    property_tax:
+      type: number
+      description: Property tax amount
+    important_dates:
+      type: array
+      items:
+        type: object
+        properties:
+          description:
+            type: string
+          date:
+            type: string
+            format: date
+    notes:
+      type: string
+      description: Additional important information
+    currency:
+      type: string
+      default: USD
