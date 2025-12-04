@@ -10,16 +10,16 @@ from datetime import datetime
 
 def summarize_file(
     documents: List[Dict[str, Any]],
-    file_type: str,
-    tags: List[str],
-    prompt: str,
-    bedrock_client
+    file_type: str = None,
+    tags: List[str] = None,
+    prompt: str = "",
+    bedrock_client = None
 ) -> Dict[str, Any]:
     """Generate summary for a file (collection of documents).
     
     Args:
         documents: List of document entries with summaries
-        file_type: Document type (bill, school, etc.)
+        file_type: Optional document type (deprecated, use tags instead)
         tags: Tags defining this file
         prompt: Summarization prompt from DB
         bedrock_client: AWS Bedrock client instance
@@ -33,8 +33,8 @@ def summarize_file(
         }
     """
     # Build context for LLM
-    context = f"File Type: {file_type}\n"
-    context += f"Tags: {', '.join(tags)}\n"
+    tags = tags or []
+    context = f"Tags: {', '.join(tags)}\n"
     context += f"Total Documents: {len(documents)}\n\n"
     context += "Documents (chronological order):\n\n"
     
@@ -57,30 +57,37 @@ def summarize_file(
         
         context += "\n"
     
-    # Prepare messages for Bedrock
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"text": prompt},
-                {"text": "\n\n--- DOCUMENTS TO SUMMARIZE ---\n"},
-                {"text": context},
-                {"text": "\n\n--- INSTRUCTIONS ---\n"},
-                {"text": "Please provide:\n1. A comprehensive summary\n2. Key insights and patterns\n3. Important statistics or totals\n4. Any recommendations or action items\n\nFormat your response as JSON:\n{\n  \"summary\": \"<summary text>\",\n  \"insights\": [\"<insight 1>\", \"<insight 2>\", ...],\n  \"statistics\": {\"<key>\": \"<value>\", ...},\n  \"recommendations\": [\"<recommendation 1>\", ...]\n}"}
-            ]
-        }
-    ]
+    # Build complete user message
+    user_message = f"""{prompt}
+
+--- DOCUMENTS TO SUMMARIZE ---
+
+{context}
+
+--- INSTRUCTIONS ---
+
+Please provide:
+1. A comprehensive summary
+2. Key insights and patterns
+3. Important statistics or totals
+4. Any recommendations or action items
+
+Format your response as JSON:
+{{
+  "summary": "<summary text>",
+  "insights": ["<insight 1>", "<insight 2>", ...],
+  "statistics": {{"<key>": "<value>", ...}},
+  "recommendations": ["<recommendation 1>", ...]
+}}"""
     
-    # Call Bedrock
+    # Call Bedrock using the correct method
     try:
-        response = bedrock_client.invoke_model(
-            model_id="us.amazon.nova-lite-v1:0",
-            messages=messages,
+        response_text = bedrock_client.invoke_with_system_and_user(
+            system="You are a document summarization expert. Analyze collections of related documents and provide comprehensive summaries with insights.",
+            user_message=user_message,
+            temperature=0.1,
             max_tokens=2000
         )
-        
-        # Parse response
-        response_text = response.get('content', [{}])[0].get('text', '')
         
         # Try to parse as JSON
         try:
@@ -194,13 +201,12 @@ Provide your evaluation as JSON:
     ]
     
     try:
-        response = bedrock_client.invoke_model(
-            model_id="anthropic.claude-3-5-sonnet-20241022-v2:0",  # Use better model for scoring
-            messages=messages,
+        response_text = bedrock_client.invoke_with_system_and_user(
+            system="You are an expert at evaluating document summaries for quality and accuracy.",
+            user_message=context,
+            temperature=0.1,
             max_tokens=1500
         )
-        
-        response_text = response.get('content', [{}])[0].get('text', '')
         
         # Parse JSON response
         json_start = response_text.find('{')

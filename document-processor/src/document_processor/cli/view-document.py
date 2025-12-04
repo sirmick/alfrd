@@ -63,7 +63,6 @@ async def view_document(doc_id: str, settings: Settings):
         confidence = doc.get('classification_confidence')
         reasoning = doc.get('classification_reasoning')
         suggested_type = doc.get('suggested_type')
-        secondary_tags = doc.get('secondary_tags')
         vendor = doc.get('vendor')
         amount = doc.get('amount')
         due_date = doc.get('due_date')
@@ -97,7 +96,7 @@ async def view_document(doc_id: str, settings: Settings):
         print()
         
         # Classification
-        if doc_type or confidence or reasoning or suggested_type or secondary_tags:
+        if doc_type or confidence or reasoning or suggested_type or tags:
             print("🏷️  CLASSIFICATION")
             print("-" * 80)
             if doc_type:
@@ -106,18 +105,6 @@ async def view_document(doc_id: str, settings: Settings):
                 print(format_field("Confidence", f"{confidence:.1%}"))
             if suggested_type:
                 print(format_field("Suggested Type", suggested_type.upper()))
-            if secondary_tags:
-                import json
-                try:
-                    if isinstance(secondary_tags, str):
-                        tags_list = json.loads(secondary_tags)
-                    else:
-                        tags_list = secondary_tags
-                    if tags_list:
-                        print(format_field("Secondary Tags", ", ".join(tags_list)))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            if tags:
                 import json
                 try:
                     if isinstance(tags, str):
@@ -125,7 +112,7 @@ async def view_document(doc_id: str, settings: Settings):
                     else:
                         tags_list = tags
                     if tags_list:
-                        print(format_field("User Tags", ", ".join(tags_list)))
+                        print(format_field("Tags", ", ".join(tags_list)))
                 except (json.JSONDecodeError, TypeError):
                     pass
             if reasoning:

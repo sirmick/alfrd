@@ -69,7 +69,7 @@ class ClassificationResult(BaseModel):
     confidence: float
     reasoning: str
     suggested_type: Optional[str] = None  # New type suggestion if applicable
-    secondary_tags: List[str] = Field(default_factory=list)  # Secondary classification tags
+    tags: List[str] = Field(default_factory=list)  # Unified classification tags (user + LLM)
 
 
 class PromptType(str, Enum):

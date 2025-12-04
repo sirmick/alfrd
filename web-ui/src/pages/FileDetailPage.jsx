@@ -21,24 +21,18 @@ import {
   IonActionSheet,
   IonToast
 } from '@ionic/react'
-import { 
-  arrowBack, 
-  ellipsisVertical, 
-  reload, 
-  add, 
+import {
+  arrowBack,
+  ellipsisVertical,
+  reload,
   documentText,
-  chevronForward 
+  chevronForward
 } from 'ionicons/icons'
 import { useHistory, useParams } from 'react-router-dom'
 
 function FileDetailPage() {
   const history = useHistory()
   const { id: fileId } = useParams()
-  
-  console.log('[FileDetailPage] Component mounted with fileId:', fileId)
-  console.log('[FileDetailPage] fileId type:', typeof fileId)
-  console.log('[FileDetailPage] isNaN check:', isNaN(parseInt(fileId)))
-  console.log('[FileDetailPage] Current pathname:', window.location.pathname)
   
   const [file, setFile] = useState(null)
   const [documents, setDocuments] = useState([])
@@ -49,7 +43,6 @@ function FileDetailPage() {
   const [toast, setToast] = useState({ show: false, message: '' })
 
   const fetchFileDetails = async () => {
-    console.log('[fetchFileDetails] Called with fileId:', fileId)
     try {
       setLoading(true)
       setError(null)
@@ -71,17 +64,13 @@ function FileDetailPage() {
   }
 
   useEffect(() => {
-    console.log('[useEffect] Running with fileId:', fileId)
-    
-    // Skip if fileId is not a valid number (e.g., "create")
-    if (!fileId || isNaN(parseInt(fileId))) {
-      console.log('[useEffect] SKIPPING - Invalid fileId detected:', fileId)
+    // Skip if fileId is not valid (e.g., "create" route)
+    if (!fileId || fileId === 'create') {
       setError('Invalid file ID')
       setLoading(false)
       return
     }
     
-    console.log('[useEffect] Valid fileId, calling fetchFileDetails')
     fetchFileDetails()
     
     // Poll for status changes every 3 seconds
@@ -278,27 +267,15 @@ function FileDetailPage() {
                 </div>
               </IonCardHeader>
               <IonCardContent>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <IonButton 
-                    expand="block" 
-                    fill="outline" 
-                    onClick={handleRegenerate}
-                    disabled={regenerating || file.status === 'regenerating'}
-                    style={{ flex: 1 }}
-                  >
-                    <IonIcon icon={reload} slot="start" />
-                    {regenerating ? 'Regenerating...' : 'Regenerate'}
-                  </IonButton>
-                  <IonButton 
-                    expand="block" 
-                    fill="outline"
-                    onClick={() => history.push(`/files/${fileId}/add-document`)}
-                    style={{ flex: 1 }}
-                  >
-                    <IonIcon icon={add} slot="start" />
-                    Add Document
-                  </IonButton>
-                </div>
+                <IonButton
+                  expand="block"
+                  fill="outline"
+                  onClick={handleRegenerate}
+                  disabled={regenerating || file.status === 'regenerating'}
+                >
+                  <IonIcon icon={reload} slot="start" />
+                  {regenerating ? 'Regenerating...' : 'Regenerate'}
+                </IonButton>
               </IonCardContent>
             </IonCard>
 
@@ -322,25 +299,49 @@ function FileDetailPage() {
                       style={{ margin: '8px' }}
                     >
                       <IonCardHeader>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '8px' }}>
                           <div style={{ flex: 1 }}>
                             <div style={{ fontSize: '0.85em', color: '#666', marginBottom: '4px' }}>
                               {formatDate(doc.created_at)}
                             </div>
-                            <div style={{ fontSize: '1em', fontWeight: '500' }}>
-                              {doc.summary || doc.filename || 'Untitled'}
+                            <div style={{ fontSize: '1em', fontWeight: '500', marginBottom: '8px' }}>
+                              {doc.filename || 'Untitled'}
                             </div>
+                            {doc.tags && doc.tags.length > 0 && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '8px' }}>
+                                <IonBadge color="primary">{doc.document_type}</IonBadge>
+                                {doc.tags.slice(0, 3).map((tag, idx) => (
+                                  <IonBadge key={idx} color="secondary">{tag}</IonBadge>
+                                ))}
+                              </div>
+                            )}
                           </div>
                           <IonIcon icon={chevronForward} style={{ color: '#999' }} />
                         </div>
                       </IonCardHeader>
-                      {doc.structured_data && Object.keys(doc.structured_data).length > 0 && (
+                      {doc.summary && (
                         <IonCardContent>
-                          <div style={{ fontSize: '0.85em', color: '#666' }}>
-                            {Object.entries(doc.structured_data).slice(0, 2).map(([key, value]) => (
-                              <div key={key}>{key}: {value}</div>
-                            ))}
+                          <div style={{
+                            fontSize: '0.9em',
+                            lineHeight: '1.5',
+                            marginBottom: '8px',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical'
+                          }}>
+                            {doc.summary}
                           </div>
+                          {doc.structured_data && Object.keys(doc.structured_data).length > 0 && (
+                            <div style={{ fontSize: '0.85em', color: '#666', borderTop: '1px solid #eee', paddingTop: '8px' }}>
+                              {Object.entries(doc.structured_data).slice(0, 3).map(([key, value]) => (
+                                <div key={key} style={{ marginBottom: '2px' }}>
+                                  <strong>{key}:</strong> {typeof value === 'object' ? JSON.stringify(value) : value}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </IonCardContent>
                       )}
                     </IonCard>
@@ -360,13 +361,6 @@ function FileDetailPage() {
               icon: reload,
               handler: () => {
                 handleRegenerate()
-              }
-            },
-            {
-              text: 'Add Document',
-              icon: add,
-              handler: () => {
-                history.push(`/files/${fileId}/add-document`)
               }
             },
             {

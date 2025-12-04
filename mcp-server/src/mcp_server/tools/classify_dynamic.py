@@ -18,6 +18,7 @@ def classify_document_dynamic(
     filename: str,
     classifier_prompt: str,
     known_types: list[str],
+    existing_tags: list[str],
     bedrock_client: BedrockClient,
 ) -> Dict[str, Any]:
     """
@@ -28,6 +29,7 @@ def classify_document_dynamic(
         filename: Original filename for context
         classifier_prompt: The classification prompt from database
         known_types: List of known document types
+        existing_tags: List of existing tags from database for consistency
         bedrock_client: Initialized BedrockClient instance
         
     Returns:
@@ -35,21 +37,24 @@ def classify_document_dynamic(
             - document_type: Classified type (string)
             - confidence: Confidence score (0.0-1.0)
             - reasoning: Explanation of classification
+            - tags: List of tags (company/service + attributes)
             - suggested_type: (Optional) New type suggestion
             - suggestion_reasoning: (Optional) Why new type is needed
-            - secondary_tags: (Optional) Additional classification tags
         
     Raises:
         ValueError: If classification fails or returns invalid data
     """
     logger.info(f"Dynamically classifying document: {filename}")
     
-    # Build the prompt with known types
+    # Build the prompt with known types and existing tags
     types_list = ", ".join(f"'{t}'" for t in known_types)
+    tags_list = ", ".join(f"'{t}'" for t in existing_tags[:50])  # Limit to 50 most popular
     
     user_message = f"""{classifier_prompt}
 
 Known document types: {types_list}
+
+Existing tags (use when applicable): {tags_list}
 
 You may classify the document as one of the known types, OR suggest a new type if none fit well.
 
@@ -62,9 +67,9 @@ Respond with JSON:
     "document_type": "chosen_type",
     "confidence": 0.95,
     "reasoning": "why this classification",
+    "tags": ["company-name", "attribute1", "attribute2"],  // REQUIRED: include company/service + attributes
     "suggested_type": "new_type_if_needed",  // Optional: only if suggesting new type
-    "suggestion_reasoning": "why new type is better",  // Optional
-    "secondary_tags": ["tag1", "tag2"]  // Optional: additional classification tags
+    "suggestion_reasoning": "why new type is better"  // Optional
 }}"""
     
     try:
@@ -101,6 +106,8 @@ Respond with JSON:
             result_data["confidence"] = 0.5
         if "reasoning" not in result_data:
             result_data["reasoning"] = "No reasoning provided"
+        if "tags" not in result_data:
+            result_data["tags"] = []  # Default to empty list if missing
         
         # Validate confidence
         confidence = float(result_data["confidence"])

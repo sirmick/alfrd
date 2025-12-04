@@ -285,24 +285,21 @@ async def list_documents(
         
         logger.info(f"Query returned {len(documents)} documents")
         
-        # Normalize data for JSON serialization
+        # Normalize data for JSON serialization and fetch tags from junction table
         for doc in documents:
             # Convert UUIDs to strings
             if doc.get('id'):
+                doc_id_str = doc['id']
                 doc['id'] = str(doc['id'])
-            
-            # Ensure secondary_tags is an array (parse JSON string if needed)
-            if doc.get('secondary_tags') is None:
-                doc['secondary_tags'] = []
-            elif isinstance(doc.get('secondary_tags'), str):
-                # Parse JSON string (for compatibility with stored JSON)
+                
+                # Fetch tags from junction table
                 try:
-                    doc['secondary_tags'] = json.loads(doc['secondary_tags'])
-                except (json.JSONDecodeError, TypeError):
-                    doc['secondary_tags'] = []
-            elif not isinstance(doc.get('secondary_tags'), list):
-                # If it's a dict or other type, convert to empty array
-                doc['secondary_tags'] = []
+                    doc['tags'] = await database.get_document_tags(doc_id_str)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch tags for {doc_id_str}: {e}")
+                    doc['tags'] = []
+            else:
+                doc['tags'] = []
             
             # Ensure structured_data is an object (not null)
             if doc.get('structured_data') is None:
@@ -349,19 +346,15 @@ async def get_document(document_id: str, database: AlfrdDatabase = Depends(get_d
             raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
         
         # Normalize data for JSON serialization
+        doc_id_uuid = doc['id']
         doc['id'] = str(doc['id'])
         
-        # Ensure JSONB fields are properly formatted
-        if doc.get('secondary_tags') is None:
-            doc['secondary_tags'] = []
-        elif isinstance(doc.get('secondary_tags'), str):
-            # Parse JSON string (for compatibility with stored JSON)
-            try:
-                doc['secondary_tags'] = json.loads(doc['secondary_tags'])
-            except (json.JSONDecodeError, TypeError):
-                doc['secondary_tags'] = []
-        elif not isinstance(doc.get('secondary_tags'), list):
-            doc['secondary_tags'] = []
+        # Fetch tags from junction table
+        try:
+            doc['tags'] = await database.get_document_tags(doc_id_uuid)
+        except Exception as e:
+            logger.warning(f"Failed to fetch tags for {doc_id_uuid}: {e}")
+            doc['tags'] = []
         
         if doc.get('structured_data') is None:
             doc['structured_data'] = {}
@@ -497,52 +490,46 @@ async def get_document_file(document_id: str, filename: str, database: AlfrdData
 
 @app.post("/api/v1/files/create")
 async def create_file(
-    document_type: str = Query(..., description="Document type (e.g., 'bill', 'finance')"),
     tags: List[str] = Query(..., description="Tags for the file"),
-    document_ids: List[str] = Query(..., description="Document UUIDs to add to file"),
     database: AlfrdDatabase = Depends(get_db)
 ):
     """
-    Create a new file and associate documents with it.
+    Create a new file for documents matching tags.
+    
+    Files automatically include ALL documents (current and future) matching the specified
+    tags. You don't need to manually select documents.
     
     Query Parameters:
-        - document_type: Type of documents in this file
-        - tags: List of tags defining the file
-        - document_ids: List of document UUIDs to include
+        - tags: List of tags defining the file (documents must have ANY of these tags)
     
     Returns:
-        Created file with generated summary
+        Created file queued for summary generation
     """
-    logger.info(f"POST /api/v1/files/create - type={document_type}, tags={tags}, docs={len(document_ids)}")
+    logger.info(f"POST /api/v1/files/create - tags={tags}")
     try:
+        if not tags:
+            raise HTTPException(status_code=400, detail="At least one tag is required")
+        
         # Generate file ID
         file_id = uuid.uuid4()
         
-        # Find or create file
+        # Find or create file (tag-only, no document_type needed)
         file_record = await database.find_or_create_file(
             file_id=file_id,
-            document_type=document_type,
             tags=tags,
             user_id=None  # TODO: Add user support
         )
         
-        # Add documents to file
-        for doc_id_str in document_ids:
-            try:
-                doc_uuid = UUID(doc_id_str)
-                await database.add_document_to_file(file_record['id'], doc_uuid)
-            except ValueError:
-                logger.warning(f"Invalid document ID: {doc_id_str}")
-        
-        # Mark file as outdated to trigger generation
-        await database.mark_file_outdated(file_record['id'])
+        # Mark file as pending to trigger generation
+        # FileGeneratorWorker will automatically query all documents matching the tags
+        await database.update_file(file_record['id'], status='pending')
         
         # Convert UUID to string for JSON
         file_record['id'] = str(file_record['id'])
         
         return {
             "file": file_record,
-            "message": "File created and queued for summary generation"
+            "message": "File created and queued for summary generation. Documents matching these tags will be included automatically."
         }
     
     except Exception as e:
@@ -553,7 +540,6 @@ async def create_file(
 
 @app.get("/api/v1/files")
 async def list_files(
-    document_type: Optional[str] = Query(None, description="Filter by document type"),
     tags: Optional[List[str]] = Query(None, description="Filter by tags (contains all)"),
     status: Optional[str] = Query(None, description="Filter by status"),
     limit: int = Query(50, ge=1, le=200),
@@ -564,7 +550,6 @@ async def list_files(
     List all files with optional filtering.
     
     Query Parameters:
-        - document_type: Filter by document type
         - tags: Filter by tags (file must contain all specified tags)
         - status: Filter by status (pending/generated/outdated)
         - limit: Max number of results
@@ -573,12 +558,11 @@ async def list_files(
     Returns:
         List of files with summaries
     """
-    logger.info(f"GET /api/v1/files - type={document_type}, tags={tags}, status={status}")
+    logger.info(f"GET /api/v1/files - tags={tags}, status={status}")
     try:
         files = await database.list_files(
             limit=limit,
             offset=offset,
-            document_type=document_type,
             tags=tags,
             status=status,
             user_id=None  # TODO: Add user support
@@ -690,61 +674,121 @@ async def regenerate_file(file_id: str, database: AlfrdDatabase = Depends(get_db
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error regenerating file: {str(e)}")
 
+# ==========================================
+# TAG ENDPOINTS
+# ==========================================
 
-@app.post("/api/v1/files/{file_id}/documents/{document_id}")
-async def add_document_to_file(
-    file_id: str,
-    document_id: str,
+@app.get("/api/v1/tags")
+async def list_tags(
+    limit: int = Query(100, ge=1, le=500, description="Max number of tags to return"),
+    order_by: str = Query("usage_count DESC", description="Sort order (usage_count DESC, tag_name ASC, last_used DESC)"),
     database: AlfrdDatabase = Depends(get_db)
 ):
     """
-    Add a document to an existing file.
+    List all tags with usage statistics.
     
-    Path Parameters:
-        - file_id: UUID of the file
-        - document_id: UUID of the document to add
+    Query Parameters:
+        - limit: Max number of tags (1-500)
+        - order_by: Sort order (usage_count DESC, tag_name ASC, last_used DESC)
     
     Returns:
-        Status confirmation
+        List of tags with usage statistics and metadata
     """
-    logger.info(f"POST /api/v1/files/{file_id}/documents/{document_id}")
+    logger.info(f"GET /api/v1/tags - limit={limit}, order_by={order_by}")
     try:
-        # Parse UUIDs
-        try:
-            file_uuid = UUID(file_id)
-            doc_uuid = UUID(document_id)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid UUID format: {str(e)}")
+        # Validate order_by parameter
+        valid_orders = ["usage_count DESC", "usage_count ASC", "tag_name ASC", "tag_name DESC", "last_used DESC", "last_used ASC"]
+        if order_by not in valid_orders:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid order_by parameter. Valid options: {', '.join(valid_orders)}"
+            )
         
-        # Check file exists
-        file_record = await database.get_file(file_uuid)
-        if not file_record:
-            raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+        # Get tags from database
+        tags = await database.get_all_tags(limit=limit, order_by=order_by)
         
-        # Check document exists
-        doc_record = await database.get_document(doc_uuid)
-        if not doc_record:
-            raise HTTPException(status_code=404, detail=f"Document not found: {document_id}")
-        
-        # Add document to file
-        await database.add_document_to_file(file_uuid, doc_uuid)
-        
-        # Mark file as outdated
-        await database.mark_file_outdated(file_uuid)
+        logger.info(f"Returning {len(tags)} tags")
         
         return {
-            "file_id": file_id,
-            "document_id": document_id,
-            "status": "added",
-            "message": "Document added to file, summary will be regenerated"
+            "tags": tags,
+            "count": len(tags),
+            "limit": limit
         }
     
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error adding document to file: {str(e)}")
+        logger.error(f"Error listing tags: {str(e)}")
         logger.error(traceback.format_exc())
-        raise HTTPException(status_code=500, detail=f"Error adding document to file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error listing tags: {str(e)}")
+
+
+@app.get("/api/v1/tags/popular")
+async def get_popular_tags(
+    limit: int = Query(20, ge=1, le=100, description="Number of popular tags to return"),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    Get most popular tags for autocomplete/suggestions.
+    
+    Query Parameters:
+        - limit: Number of tags to return (1-100)
+    
+    Returns:
+        List of popular tag names ordered by usage
+    """
+    logger.info(f"GET /api/v1/tags/popular - limit={limit}")
+    try:
+        tag_names = await database.get_popular_tags(limit=limit)
+        
+        return {
+            "tags": tag_names,
+            "count": len(tag_names)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting popular tags: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error getting popular tags: {str(e)}")
+
+
+@app.get("/api/v1/tags/search")
+async def search_tags(
+    q: str = Query(..., description="Search query (partial tag name)"),
+    limit: int = Query(10, ge=1, le=50, description="Max results"),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    Search for tags matching a query string.
+    
+    Query Parameters:
+        - q: Search query (partial tag name)
+        - limit: Max number of results (1-50)
+    
+    Returns:
+        List of matching tag names
+    """
+    logger.info(f"GET /api/v1/tags/search - query={q}, limit={limit}")
+    try:
+        if not q or len(q) < 1:
+            raise HTTPException(status_code=400, detail="Query must be at least 1 character")
+        
+        tag_names = await database.search_tags(query=q, limit=limit)
+        
+        return {
+            "tags": tag_names,
+            "count": len(tag_names),
+            "query": q
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error searching tags: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error searching tags: {str(e)}")
+
+
 
 
 def run_server():

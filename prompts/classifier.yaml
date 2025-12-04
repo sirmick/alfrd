@@ -12,6 +12,9 @@ prompt_text: |
   
   Known document types will be provided. You may also suggest a NEW type if none of the existing types fit well.
   
+  EXISTING TAGS will be provided to help you identify companies, services, and organizations consistently.
+  Use these existing tags when they match, and create specific new tags for companies/organizations.
+  
   Classification guidelines:
   
   FINANCIAL & BANKING:
@@ -57,19 +60,35 @@ prompt_text: |
   1. Choose the MOST SPECIFIC type from the known types, OR suggest a new type
   2. Provide confidence score (0.0 to 1.0) - be conservative, use >0.8 only when very certain
   3. Give clear reasoning explaining key indicators (sender, content, purpose)
-  4. Add secondary tags for better organization (e.g., "recurring", "urgent", "annual", "deductible")
+  4. Add tags for organization identification and categorization:
+     - COMPANY/SERVICE tags: Use EXISTING tags when possible, or create specific identifiers
+       Examples: "PG&E", "Lexus-Walnut-Creek", "Stanford-University", "Geico", "Kaiser-Permanente"
+     - ATTRIBUTE tags: "recurring", "urgent", "annual", "tax-deductible", "warranty", "contract"
+     - CATEGORY tags: "utility", "insurance", "education", "healthcare", "automotive"
   
-  Suggest new types ONLY when document clearly doesn't fit any existing category and represents a common, recurring document type worth tracking separately.
+  TAG GUIDELINES:
+  - Use existing tags from the provided list when they match (case-insensitive)
+  - Create NEW specific tags for companies/organizations not in the existing list
+  - Company tags should be specific enough to distinguish locations/divisions (e.g., "Lexus-Walnut-Creek" not just "Lexus")
+  - Include the company/service name as a tag for ALL commercial documents
+  - Tags should be kebab-case (lowercase with hyphens): "pg-e" not "PG&E" or "pg_e"
+  
+  Suggest new document types ONLY when document clearly doesn't fit any existing category and represents a common, recurring document type worth tracking separately.
   
   Return JSON format:
   {
       "document_type": "chosen_type_from_list",
       "confidence": 0.95,
       "reasoning": "why this classification is correct - mention key indicators",
+      "tags": ["company-name", "category", "attribute"],  // REQUIRED: always include company/service + attributes
       "suggested_type": "new_type_name",  // OPTIONAL: only if suggesting new type
-      "suggestion_reasoning": "why new type is needed",  // OPTIONAL
-      "secondary_tags": ["tag1", "tag2"]  // OPTIONAL: e.g., ["recurring", "tax_deductible", "urgent"]
+      "suggestion_reasoning": "why new type is needed"  // OPTIONAL
   }
+  
+  Example tags output:
+  - Utility bill from PG&E: ["pg-e", "utility", "electricity", "recurring"]
+  - Lexus service: ["lexus-walnut-creek", "automotive", "maintenance", "warranty"]
+  - Stanford tuition: ["stanford-university", "education", "tuition", "annual"]
 
 output_schema:
   type: object
@@ -92,14 +111,17 @@ output_schema:
     suggested_type:
       type: string
       description: Optional new type name if existing types don't fit
-    suggestion_reasoning:
-      type: string
-      description: Optional explanation for why a new type is needed
-    secondary_tags:
+    tags:
       type: array
       items:
         type: string
-      description: Optional tags like "recurring", "urgent", "annual", "tax_deductible", "important"
+      description: Required tags including company/service name and attributes (kebab-case)
+    suggested_type:
+      type: string
+      description: Optional new type name if existing types don't fit
+    suggestion_reasoning:
+      type: string
+      description: Optional explanation for why a new type is needed
 
 performance_metrics:
   min_confidence: 0.7

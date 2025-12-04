@@ -34,7 +34,6 @@ CREATE TABLE IF NOT EXISTS documents (
     -- Classification (new simplified system)
     document_type VARCHAR,  -- Dynamic types: 'junk', 'bill', 'finance', 'school', 'event', etc.
     suggested_type VARCHAR,  -- LLM-suggested new type (if different from existing)
-    secondary_tags JSONB,    -- Array of secondary classification tags (binary JSON)
     classification_confidence FLOAT,
     classification_reasoning TEXT,
     
@@ -68,7 +67,6 @@ CREATE TABLE IF NOT EXISTS documents (
     -- Summary and structured data
     summary TEXT,                           -- One-line human-readable summary
     structured_data JSONB,                  -- Extracted fields as JSON (binary)
-    tags JSONB,
     folder_metadata JSONB                   -- Parsed meta.json content
 );
 
@@ -177,6 +175,30 @@ CREATE TABLE IF NOT EXISTS document_types (
     user_id VARCHAR
 );
 
+-- Tags table - track all unique tags with usage statistics
+CREATE TABLE IF NOT EXISTS tags (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tag_name VARCHAR NOT NULL UNIQUE,
+    tag_normalized VARCHAR NOT NULL UNIQUE,  -- Lowercase, trimmed version for matching
+    usage_count INTEGER DEFAULT 0,
+    first_used TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    last_used TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    created_by VARCHAR DEFAULT 'system',  -- 'user', 'llm', or 'system'
+    category VARCHAR,  -- Optional: 'company', 'service', 'location', 'type', etc.
+    
+    -- Metadata
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Document-Tags junction table for many-to-many relationships
+CREATE TABLE IF NOT EXISTS document_tags (
+    document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
+    tag_id UUID REFERENCES tags(id) ON DELETE CASCADE,
+    added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (document_id, tag_id)
+);
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_documents_type ON documents(document_type, created_at DESC);
@@ -190,7 +212,6 @@ CREATE INDEX IF NOT EXISTS idx_documents_fts ON documents USING GIN(extracted_te
 
 -- JSONB indexes for efficient queries
 CREATE INDEX IF NOT EXISTS idx_documents_structured_data ON documents USING GIN(structured_data);
-CREATE INDEX IF NOT EXISTS idx_documents_tags ON documents USING GIN(tags);
 
 CREATE INDEX IF NOT EXISTS idx_summaries_period ON summaries(period_type, period_start DESC);
 CREATE INDEX IF NOT EXISTS idx_summaries_category ON summaries(category);
@@ -206,6 +227,17 @@ CREATE INDEX IF NOT EXISTS idx_prompts_active ON prompts(prompt_type, document_t
 CREATE INDEX IF NOT EXISTS idx_prompts_performance ON prompts(prompt_type, performance_score DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_classification_suggestions_approved ON classification_suggestions(approved, created_at);
 CREATE INDEX IF NOT EXISTS idx_document_types_active ON document_types(is_active, usage_count DESC);
+
+-- Tags indexes
+CREATE INDEX IF NOT EXISTS idx_tags_normalized ON tags(tag_normalized);
+CREATE INDEX IF NOT EXISTS idx_tags_usage ON tags(usage_count DESC);
+CREATE INDEX IF NOT EXISTS idx_tags_category ON tags(category) WHERE category IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tags_last_used ON tags(last_used DESC);
+
+-- Document-Tags junction table indexes
+CREATE INDEX IF NOT EXISTS idx_document_tags_document ON document_tags(document_id);
+CREATE INDEX IF NOT EXISTS idx_document_tags_tag ON document_tags(tag_id);
+CREATE INDEX IF NOT EXISTS idx_document_tags_added ON document_tags(added_at DESC);
 
 -- Trigger to auto-update extracted_text_tsv for full-text search
 -- Includes both extracted text AND summary for better search results
@@ -255,9 +287,8 @@ CREATE TRIGGER prompts_updated_at
 -- Files table - auto-generated collections of related documents
 CREATE TABLE IF NOT EXISTS files (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    document_type VARCHAR NOT NULL,
     tags JSONB NOT NULL,              -- Array of tags defining this file
-    tag_signature VARCHAR NOT NULL,    -- Sorted, lowercase "bill:lexus-tx-550"
+    tag_signature VARCHAR NOT NULL,    -- Sorted, lowercase tags (e.g., "lexus-tx-550" or "bill:lexus-tx-550")
     
     -- File metadata
     document_count INT DEFAULT 0,
@@ -265,7 +296,8 @@ CREATE TABLE IF NOT EXISTS files (
     last_document_date TIMESTAMP WITH TIME ZONE,
     
     -- Generated content
-    summary_text TEXT,
+    aggregated_content TEXT,           -- Raw aggregated document summaries (for reference)
+    summary_text TEXT,                 -- AI-generated summary of aggregated content
     summary_metadata JSONB,            -- Structured insights (totals, trends, etc.)
     
     -- Prompt tracking
@@ -304,7 +336,6 @@ CREATE INDEX IF NOT EXISTS idx_files_type_tags ON files USING GIN(tags);
 CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
 CREATE INDEX IF NOT EXISTS idx_files_signature ON files(tag_signature);
 CREATE INDEX IF NOT EXISTS idx_files_user ON files(user_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_files_type ON files(document_type, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_file_documents_file ON file_documents(file_id);
 CREATE INDEX IF NOT EXISTS idx_file_documents_document ON file_documents(document_id);
@@ -340,3 +371,99 @@ CREATE TRIGGER files_updated_at
     BEFORE UPDATE ON files
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+-- Trigger to auto-update updated_at on tags
+CREATE TRIGGER tags_updated_at
+    BEFORE UPDATE ON tags
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+-- Trigger to auto-invalidate files when document tags change
+-- When a document gets a new tag, any files with matching tags should regenerate
+CREATE OR REPLACE FUNCTION invalidate_files_on_tag_change() RETURNS TRIGGER AS $$
+BEGIN
+    -- Mark files as outdated if their tag signature matches the newly added tag
+    -- Tag signature format: "type:tag1:tag2:tag3"
+    -- We need to extract the tag name from the tags table and check if any file signatures contain it
+    
+    UPDATE files
+    SET status = 'outdated', 
+        updated_at = CURRENT_TIMESTAMP
+    WHERE status = 'generated'
+      AND tag_signature LIKE '%' || 
+          (SELECT ':' || tag_normalized || '%' FROM tags WHERE id = NEW.tag_id) ||
+          '%'
+       OR tag_signature LIKE 
+          (SELECT '%' || ':' || tag_normalized FROM tags WHERE id = NEW.tag_id);
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER document_tags_invalidate_files
+    AFTER INSERT ON document_tags
+    FOR EACH ROW
+    EXECUTE FUNCTION invalidate_files_on_tag_change();
+
+
+-- View for tag analytics
+CREATE OR REPLACE VIEW tag_analytics AS
+SELECT
+    t.tag_name,
+    t.tag_normalized,
+    t.usage_count,
+    t.created_by,
+    t.category,
+    t.first_used,
+    t.last_used,
+    COUNT(DISTINCT dt.document_id) as document_count,
+    array_agg(DISTINCT d.document_type) FILTER (WHERE d.document_type IS NOT NULL) as document_types
+FROM tags t
+LEFT JOIN document_tags dt ON t.id = dt.tag_id
+LEFT JOIN documents d ON dt.document_id = d.id
+GROUP BY t.id, t.tag_name, t.tag_normalized, t.usage_count, t.created_by, t.category, t.first_used, t.last_used
+ORDER BY t.usage_count DESC;
+
+-- Trigger to automatically add document_type as a tag when classified
+CREATE OR REPLACE FUNCTION auto_add_document_type_tag() RETURNS TRIGGER AS $$
+DECLARE
+    v_tag_id UUID;
+BEGIN
+    -- Only proceed if document_type is set and not null
+    IF NEW.document_type IS NOT NULL THEN
+        -- Find or create tag for document type (lowercase)
+        INSERT INTO tags (id, tag_name, tag_normalized, created_by, category, created_at, updated_at)
+        VALUES (
+            uuid_generate_v4(),
+            lower(NEW.document_type),  -- Use lowercase for consistency
+            lower(NEW.document_type),
+            'system',
+            'document_type',
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (tag_normalized) DO UPDATE
+            SET usage_count = tags.usage_count + 1,
+                last_used = CURRENT_TIMESTAMP
+        RETURNING id INTO v_tag_id;
+        
+        -- If conflict occurred, fetch the existing tag_id
+        IF v_tag_id IS NULL THEN
+            SELECT id INTO v_tag_id FROM tags WHERE tag_normalized = lower(NEW.document_type);
+        END IF;
+        
+        -- Add to document_tags junction table
+        INSERT INTO document_tags (document_id, tag_id)
+        VALUES (NEW.id, v_tag_id)
+        ON CONFLICT (document_id, tag_id) DO NOTHING;
+    END IF;
+    
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger fires AFTER document type is set
+CREATE TRIGGER document_type_auto_tag
+    AFTER INSERT OR UPDATE OF document_type ON documents
+    FOR EACH ROW
+    WHEN (NEW.document_type IS NOT NULL)
+    EXECUTE FUNCTION auto_add_document_type_tag();

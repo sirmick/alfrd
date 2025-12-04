@@ -10,6 +10,7 @@ This worker:
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from uuid import uuid4
 from datetime import datetime
@@ -26,24 +27,30 @@ from document_processor.workers import BaseWorker
 from mcp_server.llm.bedrock import BedrockClient
 from mcp_server.tools.summarize_file import summarize_file
 
+logger = logging.getLogger(__name__)
+
 
 class FileGeneratorWorker(BaseWorker):
     """Worker to generate summaries for file collections."""
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, db: AlfrdDatabase):
         """Initialize file generator worker.
         
         Args:
             settings: Application settings
+            db: Shared AlfrdDatabase instance
         """
+        from shared.types import DocumentStatus
+        
         super().__init__(
-            name="FileGeneratorWorker",
-            source_status="pending",  # Not used (we poll files table)
-            target_status="pending",   # Not used
-            settings=settings
+            settings=settings,
+            db=db,
+            worker_name="File Generator Worker",
+            source_status=DocumentStatus.COMPLETED,  # Not actually used for file generation
+            target_status=DocumentStatus.COMPLETED,   # Not used
+            concurrency=getattr(settings, 'file_generator_workers', 2),
+            poll_interval=getattr(settings, 'file_generator_poll_interval', 15)
         )
-        self.poll_interval = getattr(settings, 'file_generator_poll_interval', 15)
-        self.concurrency = getattr(settings, 'file_generator_workers', 2)
         self.bedrock = BedrockClient(
             aws_access_key_id=settings.aws_access_key_id,
             aws_secret_access_key=settings.aws_secret_access_key,
@@ -52,9 +59,8 @@ class FileGeneratorWorker(BaseWorker):
     
     async def run(self):
         """Main loop: poll for files needing generation."""
-        await self.db.initialize()
-        
-        self.logger.info(f"Starting {self.name} (poll interval: {self.poll_interval}s)")
+        self.running = True
+        logger.info(f"{self.worker_name} started")
         
         while self.running:
             try:
@@ -65,7 +71,10 @@ class FileGeneratorWorker(BaseWorker):
                 )
                 
                 if files:
-                    self.logger.info(f"Found {len(files)} files needing generation")
+                    logger.info(
+                        f"{self.worker_name} found {len(files)} files needing generation, "
+                        f"processing {min(len(files), self.concurrency)} in parallel"
+                    )
                     
                     # Process files in parallel (up to concurrency limit)
                     tasks = [
@@ -76,19 +85,19 @@ class FileGeneratorWorker(BaseWorker):
                     results = await asyncio.gather(*tasks, return_exceptions=True)
                     
                     # Log results
-                    for file_record, result in zip(files[:self.concurrency], results):
-                        if isinstance(result, Exception):
-                            self.logger.error(
-                                f"Error generating file {file_record['id']}: {result}"
-                            )
-                        elif result:
-                            self.logger.info(f"Successfully generated file {file_record['id']}")
+                    successes = sum(1 for r in results if r is True)
+                    failures = sum(1 for r in results if isinstance(r, Exception))
+                    
+                    logger.info(
+                        f"{self.worker_name} batch complete: "
+                        f"{successes} succeeded, {failures} failed"
+                    )
                 
                 # Sleep before next poll
                 await asyncio.sleep(self.poll_interval)
                 
             except Exception as e:
-                self.logger.error(f"Error in {self.name} loop: {e}", exc_info=True)
+                logger.error(f"{self.worker_name} error in main loop: {e}", exc_info=True)
                 await asyncio.sleep(self.poll_interval)
     
     async def generate_file_summary(self, file_record: dict) -> bool:
@@ -106,39 +115,12 @@ class FileGeneratorWorker(BaseWorker):
             # Mark as regenerating
             await self.db.update_file(file_id, status='regenerating')
             
-            self.logger.info(
+            logger.info(
                 f"Generating summary for file {file_id} "
-                f"({file_record['document_type']}: {file_record['tag_signature']})"
+                f"(tags: {file_record['tag_signature']})"
             )
             
-            # 1. Fetch all documents in file (chronologically)
-            docs = await self.db.get_file_documents(
-                file_id,
-                order_by='created_at ASC'
-            )
-            
-            if not docs:
-                self.logger.warning(f"File {file_id} has no documents, marking as generated")
-                await self.db.update_file(
-                    file_id,
-                    summary_text="No documents in this file yet.",
-                    summary_metadata={},
-                    status='generated',
-                    last_generated_at=datetime.now()
-                )
-                return True
-            
-            self.logger.info(f"Found {len(docs)} documents in file {file_id}")
-            
-            # 2. Get active file summarizer prompt
-            prompt = await self.db.get_active_prompt('file_summarizer', None)
-            
-            if not prompt:
-                self.logger.error("No active file_summarizer prompt found")
-                await self.db.update_file(file_id, status='pending')
-                return False
-            
-            # 3. Parse tags from JSONB
+            # 1. Parse tags from JSONB
             tags = file_record.get('tags')
             if isinstance(tags, str):
                 try:
@@ -148,7 +130,75 @@ class FileGeneratorWorker(BaseWorker):
             elif not isinstance(tags, list):
                 tags = []
             
-            # 4. Prepare document entries for summarization
+            # 2. Fetch ALL documents matching the file's tags (reverse chronological)
+            # Query documents table for matching tags
+            docs = await self.db.get_documents_by_tags(
+                tags=tags,
+                order_by='created_at DESC'  # Reverse chronological
+            )
+            
+            if not docs:
+                logger.warning(f"File {file_id} has no matching documents, marking as generated")
+                await self.db.update_file(
+                    file_id,
+                    summary_text="No documents found matching these tags yet.",
+                    summary_metadata={},
+                    aggregated_content="",
+                    status='generated',
+                    last_generated_at=datetime.now()
+                )
+                return True
+            
+            logger.info(f"Found {len(docs)} documents matching tags {tags} for file {file_id}")
+            
+            # 3. Build aggregated content text (reverse chronological)
+            aggregated_lines = []
+            aggregated_lines.append(f"File: {', '.join(tags)}")
+            aggregated_lines.append(f"Total Documents: {len(docs)}")
+            aggregated_lines.append("")
+            aggregated_lines.append("=" * 80)
+            aggregated_lines.append("")
+            
+            for i, doc in enumerate(docs, 1):
+                doc_date = doc.get('created_at')
+                if isinstance(doc_date, datetime):
+                    doc_date_str = doc_date.strftime('%Y-%m-%d %H:%M')
+                else:
+                    doc_date_str = str(doc_date)
+                
+                aggregated_lines.append(f"Document #{i}: {doc.get('filename', 'Unknown')}")
+                aggregated_lines.append(f"Date: {doc_date_str}")
+                aggregated_lines.append(f"Type: {doc.get('document_type', 'N/A')}")
+                
+                # Include structured data if available
+                structured = doc.get('structured_data')
+                if structured:
+                    if isinstance(structured, str):
+                        aggregated_lines.append(f"Data: {structured}")
+                    else:
+                        aggregated_lines.append(f"Data: {json.dumps(structured, indent=2)}")
+                
+                # Include summary
+                summary = doc.get('summary')
+                if summary:
+                    aggregated_lines.append(f"Summary: {summary}")
+                
+                aggregated_lines.append("-" * 80)
+                aggregated_lines.append("")
+            
+            aggregated_content = "\n".join(aggregated_lines)
+            
+            logger.info(f"Aggregated content length: {len(aggregated_content)} chars for file {file_id}")
+            
+            # 4. Get active file summarizer prompt
+            prompt = await self.db.get_active_prompt('file_summarizer', None)
+            
+            if not prompt:
+                logger.error("No active file_summarizer prompt found")
+                await self.db.update_file(file_id, status='pending')
+                return False
+            
+            # 5. Prepare document entries for LLM summarization
             doc_entries = []
             for doc in docs:
                 entry = {
@@ -160,20 +210,21 @@ class FileGeneratorWorker(BaseWorker):
                 }
                 doc_entries.append(entry)
             
-            # 5. Call MCP tool to generate summary
-            self.logger.info(f"Calling summarize_file for file {file_id}")
+            # 6. Call MCP tool to generate summary
+            logger.info(f"Calling summarize_file for file {file_id} with {len(doc_entries)} documents")
             
             result = summarize_file(
                 documents=doc_entries,
-                file_type=file_record['document_type'],
+                file_type=None,  # No longer using file_type
                 tags=tags,
                 prompt=prompt['prompt_text'],
                 bedrock_client=self.bedrock
             )
             
-            # 6. Update file record
+            # 7. Update file record with aggregated content AND summary
             await self.db.update_file(
                 file_id,
+                aggregated_content=aggregated_content,
                 summary_text=result['summary'],
                 summary_metadata=result.get('metadata', {}),
                 prompt_version=prompt['id'],
@@ -181,7 +232,7 @@ class FileGeneratorWorker(BaseWorker):
                 last_generated_at=datetime.now()
             )
             
-            self.logger.info(
+            logger.info(
                 f"Successfully generated summary for file {file_id} "
                 f"(confidence: {result.get('confidence', 0.0):.2f})"
             )
@@ -189,16 +240,20 @@ class FileGeneratorWorker(BaseWorker):
             return True
             
         except Exception as e:
-            self.logger.error(f"Error generating file {file_id}: {e}", exc_info=True)
+            logger.error(f"Error generating file {file_id}: {e}", exc_info=True)
             
             # Mark as pending to retry later
             await self.db.update_file(file_id, status='pending')
             
             return False
     
+    async def get_documents(self, status, limit: int) -> List[dict]:
+        """Not used by FileGeneratorWorker (we poll files table directly)."""
+        return []
+    
     async def process_document(self, doc: dict) -> bool:
         """Not used by FileGeneratorWorker (we process files, not documents)."""
-        pass
+        return True
 
 
 async def main():

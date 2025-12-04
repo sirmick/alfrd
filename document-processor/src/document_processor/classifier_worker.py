@@ -49,9 +49,10 @@ class ClassifierWorker(BaseWorker):
         self.bedrock_client = BedrockClient()
         logger.info("Initialized Bedrock client for classification")
         
-        # Cache for active classifier prompt
+        # Cache for active classifier prompt and existing tags
         self._active_prompt: Optional[dict] = None
         self._known_types: Optional[List[str]] = None
+        self._existing_tags: Optional[List[str]] = None
     
     async def _get_active_prompt(self) -> dict:
         """Get the active classifier prompt from database."""
@@ -64,6 +65,10 @@ class ClassifierWorker(BaseWorker):
         """Get list of known document types from database."""
         types = await self.db.get_document_types()
         return [t['type_name'] for t in types]
+    
+    async def _get_existing_tags(self) -> List[str]:
+        """Get list of popular existing tags from database."""
+        return await self.db.get_popular_tags(limit=50)
     
     async def get_documents(self, status: DocumentStatus, limit: int) -> List[dict]:
         """
@@ -106,13 +111,15 @@ class ClassifierWorker(BaseWorker):
             # Update status to classifying
             await self.update_status(doc_id, DocumentStatus.CLASSIFYING)
             
-            # Get active prompt and known types
+            # Get active prompt, known types, and existing tags
             if not self._active_prompt:
                 self._active_prompt = await self._get_active_prompt()
             if not self._known_types:
                 self._known_types = await self._get_known_types()
+            if not self._existing_tags:
+                self._existing_tags = await self._get_existing_tags()
             
-            # Call MCP tool for classification
+            # Call MCP tool for classification with existing tags
             loop = asyncio.get_event_loop()
             classification = await loop.run_in_executor(
                 None,
@@ -121,18 +128,35 @@ class ClassifierWorker(BaseWorker):
                 filename,
                 self._active_prompt["prompt_text"],
                 self._known_types,
+                self._existing_tags,
                 self.bedrock_client
             )
             
-            # Update database with classification results
+            # Merge user tags with LLM-generated tags
+            user_tags = json.loads(document.get("folder_metadata", "{}").get("metadata", {}).get("tags", "[]")) if document.get("folder_metadata") else []
+            llm_tags = classification.get("tags", [])
+            
+            # Update database with classification results (without tags field)
             await self.db.update_document(
                 doc_id=doc_id,
                 document_type=classification["document_type"],
                 suggested_type=classification.get("suggested_type"),
-                secondary_tags=json.dumps(classification.get("secondary_tags", [])),  # Convert to JSON string for JSONB
                 classification_confidence=classification["confidence"],
                 classification_reasoning=classification["reasoning"]
             )
+            
+            # Add document_type as a tag automatically (for easy file filtering)
+            await self.db.add_tag_to_document(doc_id, classification["document_type"], created_by='system')
+            
+            # Add tags to junction table
+            for tag in user_tags:
+                await self.db.add_tag_to_document(doc_id, tag, created_by='user')
+            
+            for tag in llm_tags:
+                await self.db.add_tag_to_document(doc_id, tag, created_by='llm')
+            
+            # Get merged tags for logging
+            merged_tags = await self.db.get_document_tags(doc_id)
             
             # If LLM suggested a new type, record it
             if classification.get("suggested_type"):
@@ -147,7 +171,7 @@ class ClassifierWorker(BaseWorker):
                 f"Classification complete for {doc_id}: "
                 f"type={classification['document_type']}, "
                 f"confidence={classification['confidence']:.2%}, "
-                f"tags={classification.get('secondary_tags', [])}"
+                f"tags={merged_tags}"
             )
             
             # Update status to classified

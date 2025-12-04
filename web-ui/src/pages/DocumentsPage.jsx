@@ -222,9 +222,9 @@ function DocumentsPage() {
                       </IonBadge>
                     )}
                     
-                    {/* Secondary tags */}
-                    {doc.secondary_tags && doc.secondary_tags.length > 0 && (
-                      doc.secondary_tags.map((tag, idx) => (
+                    {/* Tags */}
+                    {doc.tags && doc.tags.length > 0 && (
+                      doc.tags.map((tag, idx) => (
                         <IonBadge key={idx} color="secondary" style={{ marginRight: '4px' }}>
                           {tag}
                         </IonBadge>

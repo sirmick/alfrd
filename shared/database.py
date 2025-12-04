@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, List, Any
 from uuid import UUID, uuid4
 import asyncpg
+import json
 
 
 def utc_now() -> datetime:
@@ -39,13 +40,23 @@ class AlfrdDatabase:
         self.pool: Optional[asyncpg.Pool] = None
     
     async def initialize(self):
-        """Initialize the connection pool."""
+        """Initialize the connection pool with JSONB type codec."""
         if self.pool is None:
+            async def init_connection(conn):
+                """Set up JSONB codec for each connection."""
+                await conn.set_type_codec(
+                    'jsonb',
+                    encoder=json.dumps,
+                    decoder=json.loads,
+                    schema='pg_catalog'
+                )
+            
             self.pool = await asyncpg.create_pool(
                 dsn=self.database_url,
                 min_size=self.pool_min_size,
                 max_size=self.pool_max_size,
                 timeout=self.pool_timeout,
+                init=init_connection
             )
     
     async def close(self):
@@ -124,14 +135,14 @@ class AlfrdDatabase:
             row = await conn.fetchrow("""
                 SELECT id, filename, original_path, file_type, file_size,
                        status, processed_at, error_message,
-                       document_type, suggested_type, secondary_tags,
+                       document_type, suggested_type,
                        classification_confidence, classification_reasoning,
                        category, subcategory, confidence,
                        vendor, amount, currency, due_date, issue_date,
                        raw_document_path, extracted_text_path, metadata_path, folder_path,
                        created_at, updated_at, user_id,
-                       extracted_text, summary, structured_data, tags, folder_metadata
-                FROM documents 
+                       extracted_text, summary, structured_data, folder_metadata
+                FROM documents
                 WHERE id = $1
             """, doc_id)
             
@@ -179,7 +190,7 @@ class AlfrdDatabase:
             rows = await conn.fetch("""
                 SELECT id, filename, file_type, status, folder_path,
                        extracted_text, extracted_text_path, created_at, document_type,
-                       classification_confidence, classification_reasoning, secondary_tags,
+                       classification_confidence, classification_reasoning,
                        structured_data, confidence
                 FROM documents
                 WHERE status = $1
@@ -287,7 +298,6 @@ class AlfrdDatabase:
                 status,
                 document_type,
                 suggested_type,
-                secondary_tags,
                 confidence,
                 classification_confidence,
                 summary,
@@ -300,7 +310,19 @@ class AlfrdDatabase:
         
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
-            return [dict(row) for row in rows]
+            # Parse JSONB fields to ensure they're proper JSON objects
+            results = []
+            for row in rows:
+                doc = dict(row)
+                # Parse structured_data if it's a string
+                if doc.get('structured_data') and isinstance(doc['structured_data'], str):
+                    import json
+                    try:
+                        doc['structured_data'] = json.loads(doc['structured_data'])
+                    except (json.JSONDecodeError, TypeError):
+                        doc['structured_data'] = {}
+                results.append(doc)
+            return results
     
     async def get_document_full(self, doc_id: UUID) -> Optional[Dict[str, Any]]:
         """Get complete document details for API endpoint.
@@ -322,7 +344,6 @@ class AlfrdDatabase:
                     status,
                     document_type,
                     suggested_type,
-                    secondary_tags,
                     original_path,
                     raw_document_path,
                     extracted_text_path,
@@ -385,16 +406,94 @@ class AlfrdDatabase:
         
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT id, filename, document_type, vendor, 
-                       created_at, summary,
+                SELECT id, filename, document_type, vendor,
+                       created_at, summary, structured_data,
                        ts_rank(extracted_text_tsv, to_tsquery($1)) as rank
-                FROM documents 
+                FROM documents
                 WHERE extracted_text_tsv @@ to_tsquery($1)
                 ORDER BY rank DESC
                 LIMIT $2
             """, query, limit)
             
             return [dict(row) for row in rows]
+    
+    async def get_documents_by_tags(
+        self,
+        document_type: str = None,
+        tags: List[str] = None,
+        order_by: str = "created_at DESC",
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Get documents matching specific tags using junction table.
+        
+        Args:
+            document_type: Filter by document type
+            tags: List of tag names (documents must contain ANY of the specified tags)
+            order_by: SQL ORDER BY clause
+            limit: Maximum results
+            
+        Returns:
+            List of document dicts
+        """
+        await self.initialize()
+        
+        conditions = []
+        params = []
+        param_count = 1
+        
+        # Base query uses document_tags junction table if tags are specified
+        if tags:
+            # Normalize tags for matching
+            normalized_tags = [self.normalize_tag(tag) for tag in tags]
+            
+            # Query with JOIN for performance - only filter by tags, NOT document_type
+            # This allows files to aggregate documents of different types with same tags
+            query = f"""
+                SELECT DISTINCT d.id, d.filename, d.created_at, d.document_type,
+                       d.summary, d.structured_data, d.extracted_text
+                FROM documents d
+                INNER JOIN document_tags dt ON d.id = dt.document_id
+                INNER JOIN tags t ON dt.tag_id = t.id
+                WHERE t.tag_normalized = ANY($1::text[])
+                  AND d.status = 'completed'
+                ORDER BY d.{order_by}
+                LIMIT $2
+            """
+            params = [normalized_tags, limit]
+        else:
+            # No tags specified, just filter by type and status
+            if document_type:
+                conditions.append(f"document_type = ${param_count}")
+                params.append(document_type)
+                param_count += 1
+            
+            conditions.append("status = 'completed'")
+            where_clause = f"WHERE {' AND '.join(conditions)}"
+            params.append(limit)
+            
+            query = f"""
+                SELECT id, filename, created_at, document_type,
+                       summary, structured_data, extracted_text
+                FROM documents
+                {where_clause}
+                ORDER BY {order_by}
+                LIMIT ${param_count}
+            """
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+            # Parse JSONB fields
+            results = []
+            for row in rows:
+                doc = dict(row)
+                if doc.get('structured_data') and isinstance(doc['structured_data'], str):
+                    import json
+                    try:
+                        doc['structured_data'] = json.loads(doc['structured_data'])
+                    except (json.JSONDecodeError, TypeError):
+                        doc['structured_data'] = {}
+                results.append(doc)
+            return results
     
     # ==========================================
     # PROMPT OPERATIONS
@@ -645,34 +744,35 @@ class AlfrdDatabase:
     # FILE OPERATIONS
     # ==========================================
     
-    def create_tag_signature(self, document_type: str, tags: list[str]) -> str:
-        """Create normalized signature for file lookup.
+    def create_tag_signature(self, tags: list[str]) -> str:
+        """Create normalized signature from tags only.
         
         Args:
-            document_type: Document type
-            tags: List of tags
+            tags: List of tags (can include document type as a tag)
             
         Returns:
-            Normalized signature string (e.g., "bill:lexus-tx-550:oil-change")
+            Normalized signature (e.g., "lexus-tx-550" or "bill:lexus-tx-550")
         """
+        if not tags:
+            return ""
+        
         # Sort tags alphabetically, lowercase
         sorted_tags = sorted([tag.lower().strip() for tag in tags if tag])
-        # Format: "type:tag1:tag2:tag3"
-        return f"{document_type.lower()}:{':'.join(sorted_tags)}" if sorted_tags else document_type.lower()
+        
+        # Format: "tag1:tag2:tag3"
+        return ':'.join(sorted_tags)
     
     async def find_or_create_file(
         self,
         file_id: UUID,
-        document_type: str,
         tags: list[str],
         user_id: str = None
     ) -> Dict[str, Any]:
-        """Find existing file or create new one.
+        """Find existing file or create new one (tag-based).
         
         Args:
             file_id: File UUID to use if creating
-            document_type: Document type
-            tags: List of tags
+            tags: List of tags (can include document type tags like 'bill')
             user_id: User ID for multi-user support
             
         Returns:
@@ -680,12 +780,12 @@ class AlfrdDatabase:
         """
         await self.initialize()
         
-        signature = self.create_tag_signature(document_type, tags)
+        signature = self.create_tag_signature(tags)
         
         async with self.pool.acquire() as conn:
             # Try to find existing file
             row = await conn.fetchrow("""
-                SELECT id, document_type, tags, tag_signature,
+                SELECT id, tags, tag_signature,
                        document_count, first_document_date, last_document_date,
                        summary_text, summary_metadata, prompt_version,
                        status, created_at, updated_at, last_generated_at, user_id
@@ -700,15 +800,15 @@ class AlfrdDatabase:
             import json
             await conn.execute("""
                 INSERT INTO files (
-                    id, document_type, tags, tag_signature,
+                    id, tags, tag_signature,
                     document_count, status, created_at, updated_at, user_id
-                ) VALUES ($1, $2, $3, $4, 0, 'pending', $5, $6, $7)
-            """, file_id, document_type, json.dumps(tags), signature,
+                ) VALUES ($1, $2, $3, 0, 'pending', $4, $5, $6)
+            """, file_id, json.dumps(tags), signature,
                 utc_now(), utc_now(), user_id)
             
             # Fetch and return new file
             row = await conn.fetchrow("""
-                SELECT id, document_type, tags, tag_signature,
+                SELECT id, tags, tag_signature,
                        document_count, status, created_at, updated_at, user_id
                 FROM files
                 WHERE id = $1
@@ -770,7 +870,7 @@ class AlfrdDatabase:
             """, file_id, utc_now())
     
     async def get_file(self, file_id: UUID) -> Optional[Dict[str, Any]]:
-        """Get file by ID.
+        """Get file by ID with dynamically calculated document count.
         
         Args:
             file_id: File UUID
@@ -781,13 +881,34 @@ class AlfrdDatabase:
         await self.initialize()
         
         async with self.pool.acquire() as conn:
+            # Get file with dynamic document count
             row = await conn.fetchrow("""
-                SELECT id, document_type, tags, tag_signature,
-                       document_count, first_document_date, last_document_date,
-                       summary_text, summary_metadata, prompt_version,
-                       status, created_at, updated_at, last_generated_at, user_id
-                FROM files
-                WHERE id = $1
+                SELECT f.id, f.tags, f.tag_signature,
+                       f.first_document_date, f.last_document_date,
+                       f.summary_text, f.summary_metadata, f.prompt_version,
+                       f.status, f.created_at, f.updated_at, f.last_generated_at, f.user_id,
+                       COUNT(DISTINCT d.id) as document_count
+                FROM files f
+                LEFT JOIN LATERAL (
+                    SELECT DISTINCT d.id
+                    FROM documents d
+                    INNER JOIN document_tags dt ON d.id = dt.document_id
+                    INNER JOIN tags t ON dt.tag_id = t.id
+                    WHERE t.tag_normalized = ANY(
+                        SELECT unnest(
+                            string_to_array(
+                                substring(f.tag_signature from position(':' in f.tag_signature) + 1),
+                                ':'
+                            )
+                        )
+                    )
+                    AND d.status = 'completed'
+                ) d ON true
+                WHERE f.id = $1
+                GROUP BY f.id, f.tags, f.tag_signature,
+                         f.first_document_date, f.last_document_date,
+                         f.summary_text, f.summary_metadata, f.prompt_version,
+                         f.status, f.created_at, f.updated_at, f.last_generated_at, f.user_id
             """, file_id)
             
             return dict(row) if row else None
@@ -806,7 +927,7 @@ class AlfrdDatabase:
         
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT id, document_type, tags, tag_signature,
+                SELECT id, tags, tag_signature,
                        document_count, status, updated_at, last_generated_at
                 FROM files
                 WHERE status = ANY($1::text[])
@@ -819,31 +940,127 @@ class AlfrdDatabase:
     async def get_file_documents(
         self,
         file_id: UUID,
-        order_by: str = "created_at ASC"
+        order_by: str = "created_at DESC"
     ) -> List[Dict[str, Any]]:
-        """Get all documents in a file.
+        """Get all documents matching a file's tags (not just junction table).
+        
+        This queries ALL documents with tags matching the file's tags,
+        enabling dynamic file contents that update automatically.
         
         Args:
             file_id: File UUID
             order_by: SQL ORDER BY clause
             
         Returns:
-            List of document dicts
+            List of document dicts with metadata
         """
         await self.initialize()
         
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(f"""
-                SELECT d.id, d.filename, d.created_at, d.document_type,
-                       d.summary, d.structured_data, d.extracted_text,
-                       fd.added_at
-                FROM documents d
-                JOIN file_documents fd ON d.id = fd.document_id
-                WHERE fd.file_id = $1
-                ORDER BY d.{order_by}
+            # Get file's tags
+            file_row = await conn.fetchrow("""
+                SELECT tags FROM files WHERE id = $1
             """, file_id)
             
-            return [dict(row) for row in rows]
+            if not file_row:
+                return []
+            
+            # Parse tags from JSONB
+            import json
+            tags = file_row['tags']
+            if isinstance(tags, str):
+                try:
+                    tags = json.loads(tags)
+                except:
+                    tags = []
+            elif not isinstance(tags, list):
+                tags = []
+            
+            if not tags:
+                return []
+            
+            # Query documents by tags using get_documents_by_tags
+            # This returns ALL documents matching ANY of the tags
+            normalized_tags = [self.normalize_tag(tag) for tag in tags]
+            
+            rows = await conn.fetch("""
+                SELECT DISTINCT d.id, d.filename, d.created_at, d.document_type,
+                       d.summary, d.structured_data
+                FROM documents d
+                INNER JOIN document_tags dt ON d.id = dt.document_id
+                INNER JOIN tags t ON dt.tag_id = t.id
+                WHERE t.tag_normalized = ANY($1::text[])
+                  AND d.status = 'completed'
+                ORDER BY d.{order_by}
+            """.format(order_by=order_by), normalized_tags)
+            
+            # Parse JSONB fields and fetch tags for each document
+            results = []
+            for row in rows:
+                doc = dict(row)
+                
+                # Fetch tags for this document
+                doc['tags'] = await self.get_document_tags(doc['id'])
+                
+                # Parse structured_data
+                if doc.get('structured_data') and isinstance(doc['structured_data'], str):
+                    try:
+                        doc['structured_data'] = json.loads(doc['structured_data'])
+                    except (json.JSONDecodeError, TypeError):
+                        doc['structured_data'] = {}
+                
+                results.append(doc)
+            
+            return results
+    
+    async def get_document_tags(self, document_id: UUID) -> List[str]:
+        """Get all tags for a document.
+        
+        Args:
+            document_id: Document UUID
+            
+        Returns:
+            List of tag names
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT t.tag_name
+                FROM tags t
+                INNER JOIN document_tags dt ON t.id = dt.tag_id
+                WHERE dt.document_id = $1
+                ORDER BY t.tag_name
+            """, document_id)
+            
+            return [row['tag_name'] for row in rows]
+    
+    async def add_tag_to_document(self, document_id: UUID, tag_name: str, created_by: str = 'user'):
+        """Add a tag to a document.
+        
+        Args:
+            document_id: Document UUID
+            tag_name: Tag to add
+            created_by: Source of tag ('user', 'llm', 'system')
+        """
+        await self.initialize()
+        
+        # Find or create tag
+        tag_record = await self.find_or_create_tag(tag_name, created_by)
+        
+        # Add to document_tags junction table
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO document_tags (document_id, tag_id)
+                VALUES ($1, $2)
+                ON CONFLICT (document_id, tag_id) DO NOTHING
+            """, document_id, tag_record['id'])
+        
+        # Increment tag usage
+        await self.increment_tag_usage(self.normalize_tag(tag_name))
+        
+        # Note: File invalidation is handled automatically by database trigger
+        # See schema.sql: document_tags_invalidate_files trigger
     
     async def update_file(self, file_id: UUID, **fields):
         """Update file fields.
@@ -857,10 +1074,23 @@ class AlfrdDatabase:
         if not fields:
             return
         
+        import json
+        
+        # JSONB fields that need JSON serialization
+        # Note: aggregated_content is TEXT, not JSONB
+        jsonb_fields = {'tags', 'summary_metadata'}
+        
+        # Serialize JSONB fields
+        values = []
+        for key, value in fields.items():
+            if key in jsonb_fields and value is not None and not isinstance(value, str):
+                values.append(json.dumps(value))
+            else:
+                values.append(value)
+        
         # Build dynamic UPDATE query
         set_clauses = [f"{key} = ${i+2}" for i, key in enumerate(fields.keys())]
         set_clause = ", ".join(set_clauses)
-        values = list(fields.values())
         
         query = f"""
             UPDATE files
@@ -875,7 +1105,6 @@ class AlfrdDatabase:
         self,
         limit: int = 50,
         offset: int = 0,
-        document_type: str = None,
         tags: list[str] = None,
         status: str = None,
         user_id: str = None
@@ -885,7 +1114,6 @@ class AlfrdDatabase:
         Args:
             limit: Maximum number of files
             offset: Pagination offset
-            document_type: Filter by document type
             tags: Filter by tags (contains all)
             status: Filter by status
             user_id: Filter by user
@@ -899,11 +1127,7 @@ class AlfrdDatabase:
         params = []
         param_count = 1
         
-        if document_type:
-            conditions.append(f"document_type = ${param_count}")
-            params.append(document_type)
-            param_count += 1
-        
+        # Note: files.tags is still JSONB for file metadata storage
         if tags:
             import json
             conditions.append(f"tags @> ${param_count}::jsonb")
@@ -925,12 +1149,31 @@ class AlfrdDatabase:
         params.extend([limit, offset])
         
         query = f"""
-            SELECT id, document_type, tags, tag_signature,
-                   document_count, first_document_date, last_document_date,
-                   summary_text, status, created_at, updated_at
-            FROM files
+            SELECT f.id, f.tags, f.tag_signature,
+                   f.first_document_date, f.last_document_date,
+                   f.summary_text, f.status, f.created_at, f.updated_at,
+                   COUNT(DISTINCT d.id) as document_count
+            FROM files f
+            LEFT JOIN LATERAL (
+                SELECT DISTINCT d.id
+                FROM documents d
+                INNER JOIN document_tags dt ON d.id = dt.document_id
+                INNER JOIN tags t ON dt.tag_id = t.id
+                WHERE t.tag_normalized = ANY(
+                    SELECT unnest(
+                        string_to_array(
+                            substring(f.tag_signature from position(':' in f.tag_signature) + 1),
+                            ':'
+                        )
+                    )
+                )
+                AND d.status = 'completed'
+            ) d ON true
             {where_clause}
-            ORDER BY updated_at DESC
+            GROUP BY f.id, f.tags, f.tag_signature,
+                     f.first_document_date, f.last_document_date,
+                     f.summary_text, f.status, f.created_at, f.updated_at
+            ORDER BY f.updated_at DESC
             LIMIT ${param_count} OFFSET ${param_count + 1}
         """
         
@@ -990,3 +1233,213 @@ class AlfrdDatabase:
                 "total_files": total_files,
                 "files_by_status": {row['status']: row['count'] for row in files_by_status}
             }
+    
+    # ==========================================
+    # TAG OPERATIONS
+    # ==========================================
+    
+    def normalize_tag(self, tag: str) -> str:
+        """Normalize a tag to lowercase, trimmed format.
+        
+        Args:
+            tag: Tag string to normalize
+            
+        Returns:
+            Normalized tag string
+        """
+        return tag.lower().strip()
+    
+    async def find_or_create_tag(
+        self,
+        tag: str,
+        created_by: str = 'system',
+        category: str = None
+    ) -> Dict[str, Any]:
+        """Find existing tag or create new one.
+        
+        Args:
+            tag: Tag name
+            created_by: Source ('user', 'llm', or 'system')
+            category: Optional category
+            
+        Returns:
+            Tag record dict
+        """
+        await self.initialize()
+        
+        tag_normalized = self.normalize_tag(tag)
+        
+        async with self.pool.acquire() as conn:
+            # Try to find existing tag
+            row = await conn.fetchrow("""
+                SELECT id, tag_name, tag_normalized, usage_count,
+                       created_by, category, first_used, last_used
+                FROM tags
+                WHERE tag_normalized = $1
+            """, tag_normalized)
+            
+            if row:
+                return dict(row)
+            
+            # Create new tag
+            tag_id = uuid4()
+            await conn.execute("""
+                INSERT INTO tags (
+                    id, tag_name, tag_normalized, usage_count,
+                    created_by, category, first_used, last_used,
+                    created_at, updated_at
+                ) VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9)
+            """, tag_id, tag, tag_normalized, created_by, category,
+                utc_now(), utc_now(), utc_now(), utc_now())
+            
+            # Fetch and return new tag
+            row = await conn.fetchrow("""
+                SELECT id, tag_name, tag_normalized, usage_count,
+                       created_by, category, first_used, last_used
+                FROM tags
+                WHERE id = $1
+            """, tag_id)
+            
+            return dict(row)
+    
+    async def increment_tag_usage(self, tag_normalized: str):
+        """Increment usage count and update last_used for a tag.
+        
+        Args:
+            tag_normalized: Normalized tag name
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE tags
+                SET usage_count = usage_count + 1,
+                    last_used = $2
+                WHERE tag_normalized = $1
+            """, tag_normalized, utc_now())
+    
+    async def get_all_tags(
+        self,
+        limit: int = 100,
+        order_by: str = "usage_count DESC"
+    ) -> List[Dict[str, Any]]:
+        """Get all tags with optional ordering.
+        
+        Args:
+            limit: Maximum number of tags to return
+            order_by: SQL ORDER BY clause
+            
+        Returns:
+            List of tag dicts
+        """
+        await self.initialize()
+        
+        query = f"""
+            SELECT tag_name, tag_normalized, usage_count,
+                   created_by, category, first_used, last_used
+            FROM tags
+            ORDER BY {order_by}
+            LIMIT $1
+        """
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, limit)
+            return [dict(row) for row in rows]
+    
+    async def get_popular_tags(self, limit: int = 20) -> List[str]:
+        """Get most popular tag names for suggestions.
+        
+        Args:
+            limit: Maximum number of tags to return
+            
+        Returns:
+            List of tag names (original casing)
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT tag_name
+                FROM tags
+                WHERE usage_count > 0
+                ORDER BY usage_count DESC, last_used DESC
+                LIMIT $1
+            """, limit)
+            
+            return [row['tag_name'] for row in rows]
+    
+    async def search_tags(self, query: str, limit: int = 10) -> List[str]:
+        """Search for tags matching a query.
+        
+        Args:
+            query: Search query
+            limit: Maximum results
+            
+        Returns:
+            List of matching tag names
+        """
+        await self.initialize()
+        
+        query_normalized = self.normalize_tag(query)
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT tag_name
+                FROM tags
+                WHERE tag_normalized LIKE $1
+                ORDER BY usage_count DESC
+                LIMIT $2
+            """, f"%{query_normalized}%", limit)
+            
+            return [row['tag_name'] for row in rows]
+    
+    async def merge_tags_from_document(
+        self,
+        user_tags: List[str],
+        llm_tags: List[str]
+    ) -> List[str]:
+        """Merge user-provided and LLM-generated tags, creating tag records.
+        
+        Args:
+            user_tags: Tags from user input
+            llm_tags: Tags from LLM classification
+            
+        Returns:
+            Merged list of unique tags
+        """
+        await self.initialize()
+        
+        # Normalize and deduplicate
+        all_tags = set()
+        tag_mapping = {}  # normalized -> original
+        
+        # Add user tags
+        for tag in user_tags:
+            normalized = self.normalize_tag(tag)
+            if normalized and normalized not in all_tags:
+                all_tags.add(normalized)
+                tag_mapping[normalized] = tag
+        
+        # Add LLM tags
+        for tag in llm_tags:
+            normalized = self.normalize_tag(tag)
+            if normalized and normalized not in all_tags:
+                all_tags.add(normalized)
+                tag_mapping[normalized] = tag
+        
+        # Create/update tag records and increment usage
+        final_tags = []
+        for normalized in all_tags:
+            original = tag_mapping[normalized]
+            created_by = 'user' if original in user_tags else 'llm'
+            
+            # Find or create tag
+            tag_record = await self.find_or_create_tag(original, created_by)
+            
+            # Increment usage
+            await self.increment_tag_usage(normalized)
+            
+            # Use the canonical tag name from database
+            final_tags.append(tag_record['tag_name'])
+        
+        return final_tags

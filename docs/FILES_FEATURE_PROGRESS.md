@@ -1,19 +1,20 @@
 # Files Feature - Implementation Progress
 
-**Last Updated:** 2025-12-01  
-**Status:** ✅ Feature Complete - Ready for Testing
+**Last Updated:** 2025-12-04
+**Status:** ✅ Feature Complete + Tag-Only Refactor Complete
 
 ---
 
 ## Implementation Summary
 
-The Files Feature has been **fully implemented** with both backend and frontend components. This feature allows grouping related documents with AI-generated summaries.
+The Files Feature has been **fully implemented** with both backend and frontend components, including a major **tag-only refactor** completed on 2025-12-04. This feature allows grouping related documents with AI-generated summaries.
 
 ### Key Capabilities
 - **Manual File Creation** via API/UI (not automatic)
 - **AI-Powered Summaries** using AWS Bedrock (Nova Lite)
 - **Real-time Status Tracking** with auto-polling UI
-- **Tag-based Organization** with normalized signatures
+- **Tag-Only Organization** - No document type requirement! (refactored 2025-12-04)
+- **Auto-Tagging** - Documents automatically tagged with their type via DB trigger
 - **Mobile-First Design** using Ionic React PWA
 
 ---
@@ -87,9 +88,11 @@ Added 12 new methods:
 
 **`FileGeneratorWorker` Class:**
 - Polls database every 15 seconds for pending/outdated files
-- Fetches all documents in file (ordered by created_at)
-- Calls `summarize_file` MCP tool via Bedrock
-- Updates file with generated summary
+- **Queries ALL documents matching file's tags** (not just manually added to file)
+- Builds aggregated content in reverse chronological order
+- Stores aggregated content in database
+- Calls `summarize_file` MCP tool via Bedrock with aggregated data
+- Updates file with both aggregated content AND AI summary
 - Handles errors gracefully (logs and continues)
 
 **Usage:**
@@ -310,6 +313,83 @@ Added comprehensive console.log statements for troubleshooting. Can be removed o
 
 ---
 
+### ✅ Phase 11: Tag-Only Refactor (2025-12-04)
+
+**Status:** COMPLETED
+
+**Motivation:**
+The original Files implementation required BOTH `document_type` AND `tags`, creating complexity and inflexibility. Files were locked to a single document type, preventing cross-type aggregation.
+
+**Changes Made:**
+
+#### Database Schema
+**File:** `api-server/src/api_server/db/schema.sql`
+
+- ✅ **Removed** `document_type` column from `files` table (line 288)
+- ✅ **Removed** index on `document_type` for files (line 340)
+- ✅ **Fixed** SQL syntax error (orphaned ORDER BY clause)
+- ✅ **Fixed** ambiguous column reference in `auto_add_document_type_tag()` trigger
+  - Renamed variable from `tag_id` to `v_tag_id` to avoid conflicts
+
+#### Backend Changes
+**File:** `shared/database.py`
+
+- ✅ **Updated** `create_tag_signature()` - Now tag-only, no document_type parameter (line 747)
+- ✅ **Updated** `find_or_create_file()` - Removed document_type requirement (line 765)
+- ✅ **Updated** `get_file()` - Removed document_type from SELECT (line 881)
+- ✅ **Updated** `get_files_by_status()` - Removed document_type from SELECT (line 925)
+- ✅ **Updated** `get_file_documents()` - Removed document_type from SELECT (line 969)
+- ✅ **Updated** `list_files()` - Removed document_type parameter entirely (line 1113)
+
+#### API Changes
+**File:** `api-server/src/api_server/main.py`
+
+- ✅ **Updated** `GET /api/v1/files` - Removed document_type query parameter (line 541)
+- ✅ Updated endpoint documentation
+
+#### Worker Changes
+**File:** `document-processor/src/document_processor/file_generator_worker.py`
+
+- ✅ **Removed** document_type from log messages
+- ✅ **Removed** document_type parameter from `get_documents_by_tags()` call
+- ✅ **Removed** file_type from aggregated content header
+- ✅ **Updated** `summarize_file()` call to pass `file_type=None`
+
+#### MCP Tool Changes
+**File:** `mcp-server/src/mcp_server/tools/summarize_file.py`
+
+- ✅ Made `file_type` parameter optional (deprecated)
+- ✅ Added default values for all parameters
+- ✅ Removed file_type from context building
+
+#### UI Changes
+**File:** `web-ui/src/pages/CreateFilePage.jsx`
+
+- ✅ **Removed** document type selector dropdown
+- ✅ **Removed** `documentType` state variable
+- ✅ **Updated** API call to send only tags
+- ✅ **Updated** file signature preview to show tags only
+- ✅ **Updated** instructions to mention adding document type tags manually
+
+**Result:**
+Files are now purely tag-based. Document types are automatically added as tags when documents are classified, and users can include them in file tags if desired (e.g., `["bill", "lexus-tx-550"]`) or omit them for cross-type aggregation (e.g., `["lexus-tx-550"]`).
+
+**Bugs Fixed:**
+1. SQL syntax error - Orphaned ORDER BY clause after trigger definition
+2. Ambiguous column reference - `tag_id` variable conflicted with column name in trigger
+
+**Documentation:**
+- ✅ Updated `docs/FILES_TAG_ONLY_REFACTOR.md` to reflect completion
+- ✅ Updated this file to document refactor
+
+**Testing:**
+- ✅ Database recreated successfully with new schema
+- ✅ Document classification adds document_type tag automatically
+- ✅ File creation works with tags only
+- ✅ No SQL errors during initialization
+
+---
+
 ## File Structure
 
 ```
@@ -351,6 +431,15 @@ docs/
 - **Alternative:** Auto-create files when documents are added
 - **Rationale:** Gives users explicit control, avoids unwanted files
 
+### 2. Documents Pulled Automatically by Tags
+- **Chosen:** Files query ALL documents with matching tags from documents table
+- **Alternative:** Only use documents manually added to file_documents table
+- **Rationale:**
+  - Automatic discovery of all related documents
+  - No need to manually add each document to file
+  - Files stay up-to-date with new documents automatically
+  - `file_documents` table used for tracking, not filtering
+
 ### 2. Tag Signature Format
 - **Format:** `"document_type:tag1:tag2:tag3"` (sorted, lowercase)
 - **Example:** `"bill:lexus-tx-550"`, `"bill:electricity:pge"`
@@ -381,6 +470,7 @@ docs/
 1. **Debug Logging:** Console logs added for troubleshooting should be removed after testing confirms routing fix
 2. **Add Document Feature:** Button exists but functionality not implemented
 3. **No Unit Tests:** Testing framework not set up yet
+4. **Documentation Updates:** Some docs still reference old document_type requirement
 
 ### Planned Enhancements (Not Implemented)
 1. **File Scorer Worker** - Self-improving prompts via performance scoring
@@ -442,14 +532,15 @@ docs/
 
 ## Next Steps
 
-1. **User Testing** - Get feedback on UI/UX
+1. **User Testing** - Get feedback on tag-only UI/UX
 2. **Fix Bugs** - Address any issues found during testing
-3. **Add Unit Tests** - Test database methods, MCP tools
-4. **Remove Debug Logs** - Clean up console.log statements
-5. **Implement Add Document** - Complete the file detail page action
-6. **Write Integration Tests** - End-to-end file lifecycle tests
-7. **Optimize Polling** - Consider WebSocket for real-time updates
-8. **Add CLI Tools** - Command-line file viewing/generation
+3. **Update Remaining Docs** - FILES_FEATURE_DESIGN.md, FILES_UI_DESIGN.md, README.md, START_HERE.md
+4. **Add Unit Tests** - Test database methods, MCP tools
+5. **Remove Debug Logs** - Clean up console.log statements
+6. **Implement Add Document** - Complete the file detail page action
+7. **Write Integration Tests** - End-to-end file lifecycle tests
+8. **Optimize Polling** - Consider WebSocket for real-time updates
+9. **Add CLI Tools** - Command-line file viewing/generation
 
 ---
 
@@ -465,9 +556,33 @@ docs/
 
 ---
 
-**Implementation Status:** ✅ **COMPLETE**  
-**Ready for:** User Testing  
-**Estimated Dev Time:** 2-3 days (actual)  
+## Refactor Summary (2025-12-04)
+
+**What Changed:**
+- Files table: Removed `document_type` column entirely
+- File creation: Now requires only tags (no document type dropdown)
+- File queries: All documents with matching tags (any type) included
+- Auto-tagging: Documents automatically tagged with their type via DB trigger
+
+**Benefits:**
+- ✅ Simpler UX (no document type selector)
+- ✅ More flexible (files can span multiple document types)
+- ✅ Consistent (everything is tags)
+- ✅ Future-proof (any combination of tags works)
+
+**Breaking Changes:**
+- Files table schema changed (column removed)
+- API signature changed (parameter removed)
+- UI simplified (dropdown removed)
+
+**Migration:**
+Database recreated from scratch - no migration script needed.
+
+---
+
+**Implementation Status:** ✅ **COMPLETE** (including tag-only refactor)
+**Ready for:** User Testing
+**Total Dev Time:** 2-3 days (initial) + 2 hours (refactor)
 **Lines of Code:** ~1,500+ (backend + frontend)
 
 ---

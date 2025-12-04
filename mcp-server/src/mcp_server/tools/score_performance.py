@@ -23,8 +23,8 @@ def score_classification(
     Score how well a classification was performed.
     
     Args:
-        document_info: Dict with extracted_text, filename, document_type, 
-                      confidence, reasoning, secondary_tags
+        document_info: Dict with extracted_text, filename, document_type,
+                      confidence, reasoning, tags
         classifier_prompt: The prompt that was used for classification
         bedrock_client: Initialized BedrockClient instance
         
@@ -53,7 +53,7 @@ Classification result:
 - Type: {document_info.get('document_type')}
 - Confidence: {document_info.get('confidence', 0):.2%}
 - Reasoning: {document_info.get('reasoning')}
-- Secondary tags: {document_info.get('secondary_tags', [])}
+- Tags: {document_info.get('tags', [])}
 
 Evaluate this classification:
 1. Was the document type correct? (based on text content)

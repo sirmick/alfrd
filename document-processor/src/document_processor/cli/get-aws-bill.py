@@ -18,10 +18,10 @@ from shared.config import Settings
 
 def get_current_month_costs(ce_client):
     """Get costs for the current month to date."""
-    # Current month start and today
+    # Current month start and tomorrow (end date is exclusive in AWS API)
     today = datetime.now()
     start_date = today.replace(day=1).strftime('%Y-%m-%d')
-    end_date = today.strftime('%Y-%m-%d')
+    end_date = (today + timedelta(days=1)).strftime('%Y-%m-%d')
     
     try:
         response = ce_client.get_cost_and_usage(
@@ -46,9 +46,10 @@ def get_current_month_costs(ce_client):
 
 def get_service_breakdown(ce_client):
     """Get detailed breakdown by service for current month."""
+    # End date must be after start date (exclusive in AWS API)
     today = datetime.now()
     start_date = today.replace(day=1).strftime('%Y-%m-%d')
-    end_date = today.strftime('%Y-%m-%d')
+    end_date = (today + timedelta(days=1)).strftime('%Y-%m-%d')
     
     try:
         response = ce_client.get_cost_and_usage(
@@ -73,9 +74,10 @@ def get_service_breakdown(ce_client):
 
 def get_daily_costs(ce_client, days=7):
     """Get daily costs for the last N days."""
+    # End date must be after start date (exclusive in AWS API)
     today = datetime.now()
     start_date = (today - timedelta(days=days)).strftime('%Y-%m-%d')
-    end_date = today.strftime('%Y-%m-%d')
+    end_date = (today + timedelta(days=1)).strftime('%Y-%m-%d')
     
     try:
         response = ce_client.get_cost_and_usage(

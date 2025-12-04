@@ -90,8 +90,9 @@ CREATE TABLE files (
     last_document_date TIMESTAMP,
     
     -- Generated content
-    summary_text TEXT,
-    summary_metadata JSONB,            -- Structured insights
+    aggregated_content TEXT,           -- Raw aggregated document summaries (for reference)
+    summary_text TEXT,                 -- AI-generated summary of aggregated content
+    summary_metadata JSONB,            -- Structured insights (totals, trends, etc.)
     
     -- Prompt tracking
     prompt_version UUID REFERENCES prompts(id),
@@ -200,39 +201,56 @@ class FileGeneratorWorker(BaseWorker):
     
     async def generate_file_summary(self, file_record: dict):
         """Generate summary for a file."""
-        # 1. Fetch all documents in file (chronologically)
-        docs = await self.db.get_file_documents(
-            file_record['id'], 
-            order_by='created_at ASC'
+        # 1. Query ALL documents matching file's tags (not just manually added)
+        docs = await self.db.get_documents_by_tags(
+            document_type=file_record['document_type'],
+            tags=file_record['tags'],
+            order_by='created_at DESC'  # Reverse chronological
         )
         
-        # 2. Collect summaries and metadata
-        doc_entries = []
-        for doc in docs:
-            entry = {
-                'date': doc['created_at'],
-                'filename': doc['filename'],
-                'summary': doc['structured_data'],
-                'type': doc['document_type']
-            }
-            doc_entries.append(entry)
+        # 2. Build aggregated content text (reverse chronological)
+        aggregated_lines = []
+        aggregated_lines.append(f"File: {file_record['document_type']} - {', '.join(file_record['tags'])}")
+        aggregated_lines.append(f"Total Documents: {len(docs)}")
+        aggregated_lines.append("")
+        aggregated_lines.append("=" * 80)
+        
+        for i, doc in enumerate(docs, 1):
+            aggregated_lines.append("")
+            aggregated_lines.append(f"Document #{i}: {doc['filename']}")
+            aggregated_lines.append(f"Date: {doc['created_at']}")
+            aggregated_lines.append(f"Type: {doc['document_type']}")
+            if doc.get('structured_data'):
+                aggregated_lines.append(f"Data: {json.dumps(doc['structured_data'])}")
+            if doc.get('summary'):
+                aggregated_lines.append(f"Summary: {doc['summary']}")
+            aggregated_lines.append("-" * 80)
+        
+        aggregated_content = "\n".join(aggregated_lines)
         
         # 3. Get active file summarizer prompt
         prompt = await self.db.get_active_prompt('file_summarizer', None)
         
-        # 4. Call MCP tool to generate summary
+        # 4. Call MCP tool to generate AI summary
         from mcp_server.tools.summarize_file import summarize_file
         result = summarize_file(
-            documents=doc_entries,
+            documents=[{
+                'created_at': doc['created_at'],
+                'filename': doc['filename'],
+                'summary': doc.get('summary'),
+                'structured_data': doc.get('structured_data'),
+                'document_type': doc.get('document_type')
+            } for doc in docs],
             file_type=file_record['document_type'],
             tags=file_record['tags'],
             prompt=prompt['prompt_text'],
             bedrock_client=self.bedrock
         )
         
-        # 5. Update file record
+        # 5. Update file record with BOTH aggregated content AND AI summary
         await self.db.update_file(
             file_record['id'],
+            aggregated_content=aggregated_content,
             summary_text=result['summary'],
             summary_metadata=result['metadata'],
             status='generated',

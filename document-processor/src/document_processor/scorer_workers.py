@@ -77,12 +77,8 @@ class ClassifierScorerWorker(BaseWorker):
         # Get documents for scoring
         documents = await self.db.get_documents_by_status(status, limit)
         
-        # Parse secondary_tags from JSON string if needed
-        # Also ensure all expected fields are present
+        # Ensure all expected fields are present
         for doc in documents:
-            if isinstance(doc.get('secondary_tags'), str):
-                doc['secondary_tags'] = json.loads(doc['secondary_tags']) if doc['secondary_tags'] else []
-            
             # Add default values for any missing fields
             doc.setdefault('classification_confidence', doc.get('confidence', 0.0))
             doc.setdefault('classification_reasoning', '')
@@ -123,7 +119,7 @@ class ClassifierScorerWorker(BaseWorker):
                 "document_type": document.get("document_type", "unknown"),
                 "confidence": document.get("classification_confidence", 0.0),
                 "reasoning": document.get("classification_reasoning", ""),
-                "secondary_tags": document.get("secondary_tags", [])
+                "tags": document.get("tags", [])
             }
             
             loop = asyncio.get_event_loop()
