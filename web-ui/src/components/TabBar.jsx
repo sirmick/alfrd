@@ -1,6 +1,6 @@
 import { IonTabs, IonTabBar, IonTabButton, IonIcon, IonLabel, IonRouterOutlet } from '@ionic/react'
 import { Route, Redirect, Switch } from 'react-router-dom'
-import { documentText, folder, camera } from 'ionicons/icons'
+import { documentText, folder, camera, layers } from 'ionicons/icons'
 
 import CapturePage from '../pages/CapturePage'
 import DocumentsPage from '../pages/DocumentsPage'
@@ -8,6 +8,8 @@ import DocumentDetailPage from '../pages/DocumentDetailPage'
 import FilesPage from '../pages/FilesPage'
 import FileDetailPage from '../pages/FileDetailPage'
 import CreateFilePage from '../pages/CreateFilePage'
+import SeriesPage from '../pages/SeriesPage'
+import SeriesDetailPage from '../pages/SeriesDetailPage'
 
 function TabBar() {
   return (
@@ -20,6 +22,8 @@ function TabBar() {
           <Route exact path="/files" component={FilesPage} />
           <Route exact path="/files/create" component={CreateFilePage} />
           <Route exact path="/files/:id" component={FileDetailPage} />
+          <Route exact path="/series" component={SeriesPage} />
+          <Route exact path="/series/:id" component={SeriesDetailPage} />
           <Route exact path="/">
             <Redirect to="/documents" />
           </Route>
@@ -30,6 +34,11 @@ function TabBar() {
         <IonTabButton tab="documents" href="/documents">
           <IonIcon icon={documentText} />
           <IonLabel>Documents</IonLabel>
+        </IonTabButton>
+
+        <IonTabButton tab="series" href="/series">
+          <IonIcon icon={layers} />
+          <IonLabel>Series</IonLabel>
         </IonTabButton>
 
         <IonTabButton tab="files" href="/files">
