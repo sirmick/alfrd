@@ -166,19 +166,51 @@ class AlfrdDatabase:
         if not fields:
             return
         
-        # Build dynamic UPDATE query
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Ensure doc_id is a UUID object
+        from uuid import UUID as UUIDType
+        if isinstance(doc_id, str):
+            doc_id = UUIDType(doc_id)
+        
+        # JSONB fields that need JSON serialization
+        jsonb_fields = {'structured_data', 'folder_metadata'}
+        
+        # Log incoming fields for debugging
+        logger.info(f"update_document called with fields: {list(fields.keys())}")
+        for key, value in fields.items():
+            logger.info(f"  {key}: type={type(value).__name__}, value={repr(value)[:100]}")
+        
+        # Serialize JSONB fields and handle complex types
+        values = []
+        for key, value in fields.items():
+            if key in jsonb_fields and value is not None and not isinstance(value, str):
+                serialized = json.dumps(value)
+                values.append(serialized)
+                logger.info(f"  Serialized {key} to JSON: {serialized[:100]}")
+            elif isinstance(value, (list, dict)) and key not in jsonb_fields:
+                # Convert unexpected lists/dicts to JSON string
+                serialized = json.dumps(value)
+                values.append(serialized)
+                logger.warning(f"  Unexpected complex type for {key}, converting to JSON: {serialized[:100]}")
+            else:
+                values.append(value)
+        
+        # Build dynamic UPDATE query with explicit UUID casting
         set_clauses = [f"{key} = ${i+2}" for i, key in enumerate(fields.keys())]
         set_clause = ", ".join(set_clauses)
-        values = list(fields.values())
         
         query = f"""
             UPDATE documents
             SET {set_clause}, updated_at = ${len(values) + 2}
-            WHERE id = $1
+            WHERE id = $1::uuid
         """
         
+        logger.info(f"Executing query with {len(values)} values (doc_id={doc_id})")
+        
         async with self.pool.acquire() as conn:
-            await conn.execute(query, doc_id, *values, utc_now())
+            await conn.execute(query, str(doc_id), *values, utc_now())
     
     async def get_documents_by_status(self, status: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get documents with specific status.
@@ -766,23 +798,46 @@ class AlfrdDatabase:
     # FILE OPERATIONS
     # ==========================================
     
-    def create_tag_signature(self, tags: list[str]) -> str:
-        """Create normalized signature from tags only.
+    async def add_tag_to_file(self, file_id: UUID, tag_name: str):
+        """Add a tag to a file's matching criteria.
         
         Args:
-            tags: List of tags (can include document type as a tag)
+            file_id: File UUID
+            tag_name: Tag to add to file
+        """
+        await self.initialize()
+        
+        # Find or create tag
+        tag_record = await self.find_or_create_tag(tag_name, created_by='system')
+        
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO file_tags (file_id, tag_id)
+                VALUES ($1, $2)
+                ON CONFLICT (file_id, tag_id) DO NOTHING
+            """, file_id, tag_record['id'])
+    
+    async def get_file_tags(self, file_id: UUID) -> List[str]:
+        """Get all tags for a file.
+        
+        Args:
+            file_id: File UUID
             
         Returns:
-            Normalized signature (e.g., "lexus-tx-550" or "bill:lexus-tx-550")
+            List of tag names
         """
-        if not tags:
-            return ""
+        await self.initialize()
         
-        # Sort tags alphabetically, lowercase
-        sorted_tags = sorted([tag.lower().strip() for tag in tags if tag])
-        
-        # Format: "tag1:tag2:tag3"
-        return ':'.join(sorted_tags)
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT t.tag_name
+                FROM tags t
+                INNER JOIN file_tags ft ON t.id = ft.tag_id
+                WHERE ft.file_id = $1
+                ORDER BY t.tag_name
+            """, file_id)
+            
+            return [row['tag_name'] for row in rows]
     
     async def find_or_create_file(
         self,
@@ -794,7 +849,7 @@ class AlfrdDatabase:
         
         Args:
             file_id: File UUID to use if creating
-            tags: List of tags (can include document type tags like 'bill')
+            tags: List of tags defining this file
             user_id: User ID for multi-user support
             
         Returns:
@@ -802,36 +857,49 @@ class AlfrdDatabase:
         """
         await self.initialize()
         
-        signature = self.create_tag_signature(tags)
+        # Normalize tags for comparison
+        normalized_tags = sorted([self.normalize_tag(tag) for tag in tags])
         
         async with self.pool.acquire() as conn:
-            # Try to find existing file
-            row = await conn.fetchrow("""
-                SELECT id, tags, tag_signature,
-                       document_count, first_document_date, last_document_date,
-                       summary_text, summary_metadata, prompt_version,
-                       status, created_at, updated_at, last_generated_at, user_id
-                FROM files
-                WHERE tag_signature = $1 AND (user_id = $2 OR ($2 IS NULL AND user_id IS NULL))
-            """, signature, user_id)
+            # Try to find existing file with exact same tags
+            # This requires checking all files and comparing their tags
+            rows = await conn.fetch("""
+                SELECT f.id, f.document_count, f.first_document_date, f.last_document_date,
+                       f.summary_text, f.summary_metadata, f.prompt_version,
+                       f.status, f.created_at, f.updated_at, f.last_generated_at, f.user_id,
+                       array_agg(t.tag_normalized ORDER BY t.tag_normalized) as file_tags
+                FROM files f
+                LEFT JOIN file_tags ft ON f.id = ft.file_id
+                LEFT JOIN tags t ON ft.tag_id = t.id
+                WHERE f.user_id = $1 OR ($1 IS NULL AND f.user_id IS NULL)
+                GROUP BY f.id, f.document_count, f.first_document_date, f.last_document_date,
+                         f.summary_text, f.summary_metadata, f.prompt_version,
+                         f.status, f.created_at, f.updated_at, f.last_generated_at, f.user_id
+            """, user_id)
             
-            if row:
-                return dict(row)
+            # Find file with matching tags
+            for row in rows:
+                file_tags = row['file_tags']
+                if file_tags and sorted([t for t in file_tags if t]) == normalized_tags:
+                    # Found matching file
+                    result = dict(row)
+                    result.pop('file_tags')  # Remove temporary field
+                    return result
             
             # Create new file
-            import json
             await conn.execute("""
                 INSERT INTO files (
-                    id, tags, tag_signature,
-                    document_count, status, created_at, updated_at, user_id
-                ) VALUES ($1, $2, $3, 0, 'pending', $4, $5, $6)
-            """, file_id, json.dumps(tags), signature,
-                utc_now(), utc_now(), user_id)
+                    id, document_count, status, created_at, updated_at, user_id
+                ) VALUES ($1, 0, 'pending', $2, $3, $4)
+            """, file_id, utc_now(), utc_now(), user_id)
+            
+            # Add tags to file
+            for tag in tags:
+                await self.add_tag_to_file(file_id, tag)
             
             # Fetch and return new file
             row = await conn.fetchrow("""
-                SELECT id, tags, tag_signature,
-                       document_count, status, created_at, updated_at, user_id
+                SELECT id, document_count, status, created_at, updated_at, user_id
                 FROM files
                 WHERE id = $1
             """, file_id)
@@ -892,7 +960,7 @@ class AlfrdDatabase:
             """, file_id, utc_now())
     
     async def get_file(self, file_id: UUID) -> Optional[Dict[str, Any]]:
-        """Get file by ID with dynamically calculated document count.
+        """Get file by ID with tags and document count.
         
         Args:
             file_id: File UUID
@@ -903,10 +971,9 @@ class AlfrdDatabase:
         await self.initialize()
         
         async with self.pool.acquire() as conn:
-            # Get file with dynamic document count
+            # Get file
             row = await conn.fetchrow("""
-                SELECT f.id, f.tags, f.tag_signature,
-                       f.first_document_date, f.last_document_date,
+                SELECT f.id, f.first_document_date, f.last_document_date,
                        f.summary_text, f.summary_metadata, f.prompt_version,
                        f.status, f.created_at, f.updated_at, f.last_generated_at, f.user_id
                 FROM files f
@@ -918,7 +985,10 @@ class AlfrdDatabase:
             
             file_dict = dict(row)
             
-            # Get actual document count from get_file_documents
+            # Get tags for this file
+            file_dict['tags'] = await self.get_file_tags(file_id)
+            
+            # Get actual document count
             documents = await self.get_file_documents(file_id)
             file_dict['document_count'] = len(documents)
             
@@ -932,28 +1002,34 @@ class AlfrdDatabase:
             limit: Maximum number of files to return
             
         Returns:
-            List of file dicts
+            List of file dicts with tags
         """
         await self.initialize()
         
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT id, tags, tag_signature,
-                       document_count, status, updated_at, last_generated_at
+                SELECT id, document_count, status, updated_at, last_generated_at
                 FROM files
                 WHERE status = ANY($1::text[])
                 ORDER BY updated_at ASC
                 LIMIT $2
             """, statuses, limit)
             
-            return [dict(row) for row in rows]
+            # Add tags to each file
+            files = []
+            for row in rows:
+                file_dict = dict(row)
+                file_dict['tags'] = await self.get_file_tags(file_dict['id'])
+                files.append(file_dict)
+            
+            return files
     
     async def get_file_documents(
         self,
         file_id: UUID,
         order_by: str = "created_at DESC"
     ) -> List[Dict[str, Any]]:
-        """Get all documents matching a file's tags (not just junction table).
+        """Get all documents matching a file's tags.
         
         This queries ALL documents with tags matching the file's tags,
         enabling dynamic file contents that update automatically.
@@ -968,48 +1044,31 @@ class AlfrdDatabase:
         await self.initialize()
         
         async with self.pool.acquire() as conn:
-            # Get file's tags
-            file_row = await conn.fetchrow("""
-                SELECT tags FROM files WHERE id = $1
+            # Get file's tag IDs from file_tags junction table
+            tag_rows = await conn.fetch("""
+                SELECT tag_id FROM file_tags WHERE file_id = $1
             """, file_id)
             
-            if not file_row:
+            if not tag_rows:
                 return []
             
-            # Parse tags from JSONB
-            import json
-            tags = file_row['tags']
-            if isinstance(tags, str):
-                try:
-                    tags = json.loads(tags)
-                except:
-                    tags = []
-            elif not isinstance(tags, list):
-                tags = []
+            tag_ids = [row['tag_id'] for row in tag_rows]
             
-            if not tags:
-                return []
-            
-            # Query documents by tags using get_documents_by_tags
-            # This returns ALL documents matching ANY of the tags
-            normalized_tags = [self.normalize_tag(tag) for tag in tags]
-            
+            # Get documents that have ALL of these tags
             # Count how many of the file's tags each document has
-            # Only return documents that have ALL the file's tags
             rows = await conn.fetch("""
                 SELECT DISTINCT d.id, d.filename, d.created_at, d.document_type,
                        d.summary, d.structured_data
                 FROM documents d
                 WHERE d.status = 'completed'
                   AND (
-                    SELECT COUNT(DISTINCT t.tag_normalized)
+                    SELECT COUNT(DISTINCT dt.tag_id)
                     FROM document_tags dt
-                    INNER JOIN tags t ON dt.tag_id = t.id
                     WHERE dt.document_id = d.id
-                      AND t.tag_normalized = ANY($1::text[])
+                      AND dt.tag_id = ANY($1::uuid[])
                   ) = $2
                 ORDER BY d.{order_by}
-            """.format(order_by=order_by), normalized_tags, len(normalized_tags))
+            """.format(order_by=order_by), tag_ids, len(tag_ids))
             
             # Parse JSONB fields and fetch tags for each document
             results = []
@@ -1021,6 +1080,7 @@ class AlfrdDatabase:
                 
                 # Parse structured_data
                 if doc.get('structured_data') and isinstance(doc['structured_data'], str):
+                    import json
                     try:
                         doc['structured_data'] = json.loads(doc['structured_data'])
                     except (json.JSONDecodeError, TypeError):
@@ -1062,16 +1122,30 @@ class AlfrdDatabase:
         """
         await self.initialize()
         
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Find or create tag
         tag_record = await self.find_or_create_tag(tag_name, created_by)
+        
+        # Ensure UUIDs are proper UUID objects
+        from uuid import UUID as UUIDType
+        if isinstance(document_id, str):
+            document_id = UUIDType(document_id)
+        
+        tag_id = tag_record['id']
+        if isinstance(tag_id, str):
+            tag_id = UUIDType(tag_id)
+        
+        logger.info(f"Adding tag '{tag_name}' to document {document_id} (tag_id={tag_id})")
         
         # Add to document_tags junction table
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO document_tags (document_id, tag_id)
-                VALUES ($1, $2)
+                VALUES ($1::uuid, $2::uuid)
                 ON CONFLICT (document_id, tag_id) DO NOTHING
-            """, document_id, tag_record['id'])
+            """, str(document_id), str(tag_id))
         
         # Increment tag usage
         await self.increment_tag_usage(self.normalize_tag(tag_name))
@@ -1094,8 +1168,7 @@ class AlfrdDatabase:
         import json
         
         # JSONB fields that need JSON serialization
-        # Note: aggregated_content is TEXT, not JSONB
-        jsonb_fields = {'tags', 'summary_metadata'}
+        jsonb_fields = {'summary_metadata'}
         
         # Serialize JSONB fields
         values = []
@@ -1131,12 +1204,12 @@ class AlfrdDatabase:
         Args:
             limit: Maximum number of files
             offset: Pagination offset
-            tags: Filter by tags (contains all)
+            tags: Filter by tags (files must have all specified tags)
             status: Filter by status
             user_id: Filter by user
             
         Returns:
-            List of file dicts
+            List of file dicts with tags
         """
         await self.initialize()
         
@@ -1144,20 +1217,39 @@ class AlfrdDatabase:
         params = []
         param_count = 1
         
-        # Note: files.tags is still JSONB for file metadata storage
+        # Tag filtering requires JOIN with file_tags
         if tags:
-            import json
-            conditions.append(f"tags @> ${param_count}::jsonb")
-            params.append(json.dumps(tags))
-            param_count += 1
+            # Normalize tags
+            normalized_tags = [self.normalize_tag(tag) for tag in tags]
+            
+            # Need to get tag IDs first
+            async with self.pool.acquire() as conn:
+                tag_id_rows = await conn.fetch("""
+                    SELECT id FROM tags WHERE tag_normalized = ANY($1::text[])
+                """, normalized_tags)
+                
+                if len(tag_id_rows) != len(normalized_tags):
+                    # Some tags don't exist, no files will match
+                    return []
+                
+                tag_ids = [row['id'] for row in tag_id_rows]
+            
+            # Filter files that have ALL these tag IDs
+            conditions.append(f"""
+                (SELECT COUNT(DISTINCT ft.tag_id) FROM file_tags ft
+                 WHERE ft.file_id = f.id AND ft.tag_id = ANY(${param_count}::uuid[]))
+                = ${param_count + 1}
+            """)
+            params.extend([tag_ids, len(tag_ids)])
+            param_count += 2
         
         if status:
-            conditions.append(f"status = ${param_count}")
+            conditions.append(f"f.status = ${param_count}")
             params.append(status)
             param_count += 1
         
         if user_id is not None:
-            conditions.append(f"(user_id = ${param_count} OR (${param_count} IS NULL AND user_id IS NULL))")
+            conditions.append(f"(f.user_id = ${param_count} OR (${param_count} IS NULL AND f.user_id IS NULL))")
             params.append(user_id)
             param_count += 1
         
@@ -1166,8 +1258,7 @@ class AlfrdDatabase:
         params.extend([limit, offset])
         
         query = f"""
-            SELECT f.id, f.tags, f.tag_signature,
-                   f.first_document_date, f.last_document_date,
+            SELECT f.id, f.first_document_date, f.last_document_date,
                    f.summary_text, f.status, f.created_at, f.updated_at
             FROM files f
             {where_clause}
@@ -1177,12 +1268,15 @@ class AlfrdDatabase:
         
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
-            files = [dict(row) for row in rows]
+            files = []
             
-            # Add document count for each file
-            for file in files:
-                documents = await self.get_file_documents(file['id'])
-                file['document_count'] = len(documents)
+            # Add tags and document count for each file
+            for row in rows:
+                file_dict = dict(row)
+                file_dict['tags'] = await self.get_file_tags(file_dict['id'])
+                documents = await self.get_file_documents(file_dict['id'])
+                file_dict['document_count'] = len(documents)
+                files.append(file_dict)
             
             return files
     

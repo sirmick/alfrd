@@ -77,15 +77,22 @@ async def init_database():
     
     # Execute schema
     try:
-        # Drop all existing tables
+        # Drop all existing tables in correct order (respecting foreign keys)
         print("Dropping existing tables...")
         await conn.execute("""
+            DROP TABLE IF EXISTS file_tags CASCADE;
+            DROP TABLE IF EXISTS file_documents CASCADE;
+            DROP TABLE IF EXISTS document_series CASCADE;
+            DROP TABLE IF EXISTS document_tags CASCADE;
             DROP TABLE IF EXISTS classification_suggestions CASCADE;
             DROP TABLE IF EXISTS processing_events CASCADE;
             DROP TABLE IF EXISTS prompts CASCADE;
             DROP TABLE IF EXISTS document_types CASCADE;
             DROP TABLE IF EXISTS analytics CASCADE;
             DROP TABLE IF EXISTS summaries CASCADE;
+            DROP TABLE IF EXISTS series CASCADE;
+            DROP TABLE IF EXISTS files CASCADE;
+            DROP TABLE IF EXISTS tags CASCADE;
             DROP TABLE IF EXISTS documents CASCADE;
         """)
         

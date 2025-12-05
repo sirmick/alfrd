@@ -137,12 +137,21 @@ class ClassifierWorker(BaseWorker):
             llm_tags = classification.get("tags", [])
             
             # Update database with classification results (without tags field)
+            # Log values for debugging
+            logger.info(
+                f"Updating document {doc_id} with classification: "
+                f"type={classification['document_type']}, "
+                f"suggested={classification.get('suggested_type')}, "
+                f"confidence={classification['confidence']}, "
+                f"reasoning_type={type(classification['reasoning'])}"
+            )
+            
             await self.db.update_document(
                 doc_id=doc_id,
                 document_type=classification["document_type"],
                 suggested_type=classification.get("suggested_type"),
                 classification_confidence=classification["confidence"],
-                classification_reasoning=classification["reasoning"]
+                classification_reasoning=str(classification["reasoning"]) if classification.get("reasoning") else None
             )
             
             # Add document_type as a tag automatically (for easy file filtering)
@@ -160,7 +169,9 @@ class ClassifierWorker(BaseWorker):
             
             # If LLM suggested a new type, record it
             if classification.get("suggested_type"):
+                from uuid import uuid4
                 await self.db.record_classification_suggestion(
+                    suggestion_id=uuid4(),
                     suggested_type=classification["suggested_type"],
                     document_id=doc_id,
                     confidence=classification["confidence"],

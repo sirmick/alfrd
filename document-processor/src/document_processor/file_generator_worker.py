@@ -115,25 +115,17 @@ class FileGeneratorWorker(BaseWorker):
             # Mark as regenerating
             await self.db.update_file(file_id, status='regenerating')
             
+            # 1. Get tags for this file from file_tags junction table
+            tags = await self.db.get_file_tags(file_id)
+            
             logger.info(
                 f"Generating summary for file {file_id} "
-                f"(tags: {file_record['tag_signature']})"
+                f"(tags: {', '.join(tags)})"
             )
             
-            # 1. Parse tags from JSONB
-            tags = file_record.get('tags')
-            if isinstance(tags, str):
-                try:
-                    tags = json.loads(tags)
-                except:
-                    tags = []
-            elif not isinstance(tags, list):
-                tags = []
-            
             # 2. Fetch ALL documents matching the file's tags (reverse chronological)
-            # Query documents table for matching tags
-            docs = await self.db.get_documents_by_tags(
-                tags=tags,
+            docs = await self.db.get_file_documents(
+                file_id=file_id,
                 order_by='created_at DESC'  # Reverse chronological
             )
             

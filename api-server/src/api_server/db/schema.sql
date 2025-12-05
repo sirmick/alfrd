@@ -288,9 +288,7 @@ CREATE TRIGGER prompts_updated_at
 -- Files table - auto-generated collections of related documents
 CREATE TABLE IF NOT EXISTS files (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tags JSONB NOT NULL,              -- Array of tags defining this file
-    tag_signature VARCHAR NOT NULL,    -- Sorted, lowercase tags (e.g., "lexus-tx-550" or "bill:lexus-tx-550")
-    file_source VARCHAR DEFAULT 'llm' CHECK (file_source IN ('user', 'llm')),  -- NEW: user-created vs auto-generated
+    file_source VARCHAR DEFAULT 'llm' CHECK (file_source IN ('user', 'llm')),
     
     -- File metadata
     document_count INT DEFAULT 0,
@@ -298,19 +296,19 @@ CREATE TABLE IF NOT EXISTS files (
     last_document_date TIMESTAMP WITH TIME ZONE,
     
     -- Generated content
-    aggregated_content TEXT,           -- Raw aggregated document summaries (for reference)
-    summary_text TEXT,                 -- AI-generated summary of aggregated content
-    summary_metadata JSONB,            -- Structured insights (totals, trends, etc.)
+    aggregated_content TEXT,
+    summary_text TEXT,
+    summary_metadata JSONB,
     
     -- Prompt tracking
     prompt_version UUID REFERENCES prompts(id),
     
     -- Status tracking
     status VARCHAR NOT NULL DEFAULT 'pending' CHECK (status IN (
-        'pending',      -- Needs generation
-        'generated',    -- Summary created
-        'outdated',     -- New documents added since last generation
-        'regenerating'  -- Being updated
+        'pending',
+        'generated',
+        'outdated',
+        'regenerating'
     )),
     
     -- Timestamps
@@ -319,10 +317,7 @@ CREATE TABLE IF NOT EXISTS files (
     last_generated_at TIMESTAMP WITH TIME ZONE,
     
     -- Multi-user support
-    user_id VARCHAR,
-    
-    -- Ensure uniqueness per user
-    UNIQUE(tag_signature, user_id)
+    user_id VARCHAR
 );
 
 -- File-document associations (many-to-many)
@@ -334,14 +329,24 @@ CREATE TABLE IF NOT EXISTS file_documents (
 );
 
 -- Indexes for efficient queries
-CREATE INDEX IF NOT EXISTS idx_files_type_tags ON files USING GIN(tags);
 CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
-CREATE INDEX IF NOT EXISTS idx_files_signature ON files(tag_signature);
 CREATE INDEX IF NOT EXISTS idx_files_user ON files(user_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_files_source ON files(file_source);  -- NEW: Efficient queries for LLM vs user files
+CREATE INDEX IF NOT EXISTS idx_files_source ON files(file_source);
 
 CREATE INDEX IF NOT EXISTS idx_file_documents_file ON file_documents(file_id);
 CREATE INDEX IF NOT EXISTS idx_file_documents_document ON file_documents(document_id);
+
+-- File-Tags junction table (which tags define each file)
+CREATE TABLE IF NOT EXISTS file_tags (
+    file_id UUID REFERENCES files(id) ON DELETE CASCADE,
+    tag_id UUID REFERENCES tags(id) ON DELETE CASCADE,
+    added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (file_id, tag_id)
+);
+
+-- File-Tags junction table indexes
+CREATE INDEX IF NOT EXISTS idx_file_tags_file ON file_tags(file_id);
+CREATE INDEX IF NOT EXISTS idx_file_tags_tag ON file_tags(tag_id);
 
 -- Extend prompts table to support file_summarizer and series_detector
 ALTER TABLE prompts DROP CONSTRAINT IF EXISTS prompts_prompt_type_check;
@@ -381,22 +386,19 @@ CREATE TRIGGER tags_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 -- Trigger to auto-invalidate files when document tags change
--- When a document gets a new tag, any files with matching tags should regenerate
+-- When a document gets a new tag, mark any files that have that tag as outdated
 CREATE OR REPLACE FUNCTION invalidate_files_on_tag_change() RETURNS TRIGGER AS $$
 BEGIN
-    -- Mark files as outdated if their tag signature matches the newly added tag
-    -- Tag signature format: "type:tag1:tag2:tag3"
-    -- We need to extract the tag name from the tags table and check if any file signatures contain it
-    
+    -- Mark all files with this tag as outdated
     UPDATE files
-    SET status = 'outdated', 
+    SET status = 'outdated',
         updated_at = CURRENT_TIMESTAMP
     WHERE status = 'generated'
-      AND tag_signature LIKE '%' || 
-          (SELECT ':' || tag_normalized || '%' FROM tags WHERE id = NEW.tag_id) ||
-          '%'
-       OR tag_signature LIKE 
-          (SELECT '%' || ':' || tag_normalized FROM tags WHERE id = NEW.tag_id);
+      AND id IN (
+          SELECT DISTINCT file_id
+          FROM file_tags
+          WHERE tag_id = NEW.tag_id
+      );
     
     RETURN NEW;
 END;
