@@ -908,33 +908,21 @@ class AlfrdDatabase:
                 SELECT f.id, f.tags, f.tag_signature,
                        f.first_document_date, f.last_document_date,
                        f.summary_text, f.summary_metadata, f.prompt_version,
-                       f.status, f.created_at, f.updated_at, f.last_generated_at, f.user_id,
-                       COUNT(DISTINCT d.id) as document_count
+                       f.status, f.created_at, f.updated_at, f.last_generated_at, f.user_id
                 FROM files f
-                LEFT JOIN LATERAL (
-                    SELECT DISTINCT d.id
-                    FROM documents d
-                    WHERE d.status = 'completed'
-                      AND (
-                        SELECT COUNT(DISTINCT t.tag_normalized)
-                        FROM document_tags dt
-                        INNER JOIN tags t ON dt.tag_id = t.id
-                        WHERE dt.document_id = d.id
-                          AND t.tag_normalized = ANY(
-                            SELECT unnest(
-                                string_to_array(f.tag_signature, ':')
-                            )
-                          )
-                      ) = array_length(string_to_array(f.tag_signature, ':'), 1)
-                ) d ON true
                 WHERE f.id = $1
-                GROUP BY f.id, f.tags, f.tag_signature,
-                         f.first_document_date, f.last_document_date,
-                         f.summary_text, f.summary_metadata, f.prompt_version,
-                         f.status, f.created_at, f.updated_at, f.last_generated_at, f.user_id
             """, file_id)
             
-            return dict(row) if row else None
+            if not row:
+                return None
+            
+            file_dict = dict(row)
+            
+            # Get actual document count from get_file_documents
+            documents = await self.get_file_documents(file_id)
+            file_dict['document_count'] = len(documents)
+            
+            return file_dict
     
     async def get_files_by_status(self, statuses: list[str], limit: int = 10) -> List[Dict[str, Any]]:
         """Get files with specific statuses.
@@ -1180,36 +1168,23 @@ class AlfrdDatabase:
         query = f"""
             SELECT f.id, f.tags, f.tag_signature,
                    f.first_document_date, f.last_document_date,
-                   f.summary_text, f.status, f.created_at, f.updated_at,
-                   COUNT(DISTINCT d.id) as document_count
+                   f.summary_text, f.status, f.created_at, f.updated_at
             FROM files f
-            LEFT JOIN LATERAL (
-                SELECT DISTINCT d.id
-                FROM documents d
-                WHERE d.status = 'completed'
-                  AND (
-                    SELECT COUNT(DISTINCT t.tag_normalized)
-                    FROM document_tags dt
-                    INNER JOIN tags t ON dt.tag_id = t.id
-                    WHERE dt.document_id = d.id
-                      AND t.tag_normalized = ANY(
-                        SELECT unnest(
-                            string_to_array(f.tag_signature, ':')
-                        )
-                      )
-                  ) = array_length(string_to_array(f.tag_signature, ':'), 1)
-            ) d ON true
             {where_clause}
-            GROUP BY f.id, f.tags, f.tag_signature,
-                     f.first_document_date, f.last_document_date,
-                     f.summary_text, f.status, f.created_at, f.updated_at
             ORDER BY f.updated_at DESC
             LIMIT ${param_count} OFFSET ${param_count + 1}
         """
         
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(query, *params)
-            return [dict(row) for row in rows]
+            files = [dict(row) for row in rows]
+            
+            # Add document count for each file
+            for file in files:
+                documents = await self.get_file_documents(file['id'])
+                file['document_count'] = len(documents)
+            
+            return files
     
     async def delete_file(self, file_id: UUID):
         """Delete file (cascade deletes file_documents).

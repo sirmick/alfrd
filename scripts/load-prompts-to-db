@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Load YAML prompt configurations into PostgreSQL database.
+
+This script reads all YAML prompt files from the prompts/ directory
+and loads them into the PostgreSQL database for runtime management.
+
+Usage:
+    ./scripts/load-prompts-to-db              # Load all prompts
+    ./scripts/load-prompts-to-db --force      # Force reload (deactivates old versions)
+    ./scripts/load-prompts-to-db --dry-run    # Preview without loading
+"""
+
+import sys
+import asyncio
+import argparse
+from pathlib import Path
+from uuid import uuid4
+from datetime import datetime, timezone
+import yaml
+import json
+
+# Add project root to path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from shared.config import Settings
+from shared.database import AlfrdDatabase
+
+
+async def load_document_types(db: AlfrdDatabase, yaml_path: Path, dry_run: bool = False):
+    """Load document types from YAML file into database.
+    
+    Args:
+        db: Database instance
+        yaml_path: Path to document_types.yaml
+        dry_run: If True, don't actually load, just preview
+    """
+    print(f"\n📋 Loading document types from {yaml_path.name}...")
+    
+    with open(yaml_path, 'r') as f:
+        data = yaml.safe_load(f)
+    
+    document_types = data.get('document_types', [])
+    
+    if dry_run:
+        print(f"   Would load {len(document_types)} document types:")
+        for dt in document_types:
+            print(f"   - {dt['type_name']}: {dt['description']}")
+        return
+    
+    # Load each document type
+    for dt in document_types:
+        type_id = uuid4()
+        type_name = dt['type_name']
+        description = dt.get('description', '')
+        
+        try:
+            await db.create_document_type(
+                type_id=type_id,
+                type_name=type_name,
+                description=description
+            )
+            print(f"   ✅ Loaded: {type_name}")
+        except Exception as e:
+            print(f"   ⚠️  Skipped {type_name}: {str(e)}")
+    
+    print(f"   Loaded {len(document_types)} document types")
+
+
+async def load_prompt(db: AlfrdDatabase, yaml_path: Path, force: bool = False, dry_run: bool = False):
+    """Load a single prompt from YAML file into database.
+    
+    Args:
+        db: Database instance
+        yaml_path: Path to YAML file
+        force: If True, deactivate old versions before loading
+        dry_run: If True, don't actually load, just preview
+    """
+    print(f"\n📝 Loading prompt from {yaml_path.name}...")
+    
+    with open(yaml_path, 'r') as f:
+        data = yaml.safe_load(f)
+    
+    prompt_type = data.get('prompt_type')
+    document_type = data.get('document_type')
+    prompt_text = data.get('prompt_text', '').strip()
+    version = data.get('version', 1)
+    performance_metrics = data.get('performance_metrics', {})
+    
+    if not prompt_type or not prompt_text:
+        print(f"   ⚠️  Skipping {yaml_path.name}: Missing prompt_type or prompt_text")
+        return
+    
+    if dry_run:
+        print(f"   Type: {prompt_type}")
+        print(f"   Document Type: {document_type or 'NULL (classifier)'}")
+        print(f"   Version: {version}")
+        print(f"   Text Length: {len(prompt_text)} chars")
+        print(f"   Performance Metrics: {performance_metrics}")
+        return
+    
+    # Deactivate old versions if force flag is set
+    if force:
+        await db.deactivate_old_prompts(prompt_type, document_type)
+        print(f"   🔄 Deactivated old versions")
+    
+    # Check if this exact version already exists
+    existing = await db.list_prompts(
+        prompt_type=prompt_type,
+        document_type=document_type,
+        include_inactive=True
+    )
+    
+    # Find highest version number
+    max_version = 0
+    for prompt in existing:
+        if prompt['version'] > max_version:
+            max_version = prompt['version']
+    
+    # Use next version if we're forcing, otherwise use version from YAML
+    if force and existing:
+        version = max_version + 1
+    
+    # Create new prompt version
+    prompt_id = uuid4()
+    
+    # Convert performance_metrics to JSONB-compatible dict
+    perf_metrics_json = None
+    if performance_metrics:
+        perf_metrics_json = performance_metrics
+    
+    try:
+        await db.create_prompt(
+            prompt_id=prompt_id,
+            prompt_type=prompt_type,
+            prompt_text=prompt_text,
+            document_type=document_type,
+            version=version,
+            performance_score=0.8,  # Default initial score
+            performance_metrics=perf_metrics_json
+        )
+        print(f"   ✅ Loaded: {prompt_type}/{document_type or 'NULL'} v{version}")
+    except Exception as e:
+        print(f"   ⚠️  Error loading: {str(e)}")
+
+
+async def main():
+    """Main entry point."""
+    parser = argparse.ArgumentParser(description='Load YAML prompts into database')
+    parser.add_argument('--force', action='store_true',
+                       help='Deactivate old versions and create new ones')
+    parser.add_argument('--dry-run', action='store_true',
+                       help='Preview without actually loading')
+    args = parser.parse_args()
+    
+    print("🚀 ALFRD Prompt Loader")
+    print("=" * 60)
+    
+    if args.dry_run:
+        print("⚠️  DRY RUN MODE - No changes will be made")
+    
+    if args.force:
+        print("⚠️  FORCE MODE - Will deactivate old prompt versions")
+    
+    # Initialize settings and database
+    settings = Settings()
+    db = AlfrdDatabase(database_url=settings.database_url)
+    await db.initialize()
+    
+    try:
+        prompts_dir = project_root / 'prompts'
+        
+        # Load document types first
+        doc_types_path = prompts_dir / 'document_types.yaml'
+        if doc_types_path.exists():
+            await load_document_types(db, doc_types_path, dry_run=args.dry_run)
+        
+        # Load classifier prompt
+        classifier_path = prompts_dir / 'classifier.yaml'
+        if classifier_path.exists():
+            await load_prompt(db, classifier_path, force=args.force, dry_run=args.dry_run)
+        
+        # Load all summarizer prompts
+        summarizers_dir = prompts_dir / 'summarizers'
+        if summarizers_dir.exists():
+            for yaml_file in sorted(summarizers_dir.glob('*.yaml')):
+                await load_prompt(db, yaml_file, force=args.force, dry_run=args.dry_run)
+        
+        print("\n" + "=" * 60)
+        print("✅ Prompt loading complete!")
+        
+        # Show summary
+        if not args.dry_run:
+            print("\n📊 Database Summary:")
+            prompts = await db.list_prompts(include_inactive=False)
+            doc_types = await db.get_document_types(active_only=True)
+            
+            print(f"   Active Prompts: {len(prompts)}")
+            print(f"   Document Types: {len(doc_types)}")
+            
+            # Group by type
+            by_type = {}
+            for p in prompts:
+                ptype = p['prompt_type']
+                by_type[ptype] = by_type.get(ptype, 0) + 1
+            
+            print("\n   Prompts by Type:")
+            for ptype, count in by_type.items():
+                print(f"   - {ptype}: {count}")
+        
+    finally:
+        await db.close()
+
+
+if __name__ == '__main__':
+    asyncio.run(main())

@@ -19,8 +19,9 @@ Personal document management system with AI-powered processing and self-improvin
 - **Deployment:** Docker with supervisord
 
 **Key Features:**
-- 5-worker self-improving pipeline with prompt evolution
+- 7-worker self-improving pipeline with prompt evolution
 - State-machine-driven processing (crash-resistant)
+- Series-based filing with hybrid tag approach
 - Dynamic document type classification
 - Real-time full-text search
 - Block-level OCR data preservation for spatial reasoning
@@ -76,16 +77,22 @@ User uploads folder → pending
          ↓
     SummarizerWorker (type-specific) → summarized
          ↓
-    SummarizerScorerWorker (evaluate & evolve) → completed
+    SummarizerScorerWorker (evaluate & evolve) → scored_summary
+         ↓
+    FilingWorker (series detection & tagging) → filed
+         ↓
+    FileGeneratorWorker (file summaries) → completed
 ```
 
 ### Document Status Values
 - `pending` - Folder detected in inbox
 - `ocr_completed` - Text extracted
-- `classified` - Type determined (bill/finance/junk/school/event/generic)
+- `classified` - Type determined (utility_bill/insurance/education/etc.)
 - `scored_classification` - Classifier performance evaluated
 - `summarized` - Type-specific summary generated
-- `completed` - All processing done
+- `scored_summary` - Summarizer performance evaluated
+- `filed` - Added to series and tagged
+- `completed` - All processing done (file summaries generated)
 - `failed` - Error at any stage
 
 ---
@@ -182,7 +189,7 @@ User uploads folder → pending
 esec/
 ├── api-server/              # FastAPI REST API
 │   └── src/api_server/db/schema.sql
-├── document-processor/      # 5-worker pipeline
+├── document-processor/      # 7-worker pipeline
 │   └── src/document_processor/
 │       ├── main.py          # Orchestrator
 │       ├── workers.py       # BaseWorker + WorkerPool
@@ -190,6 +197,8 @@ esec/
 │       ├── classifier_worker.py
 │       ├── summarizer_worker.py
 │       ├── scorer_workers.py
+│       ├── filing_worker.py          # Series detection & filing
+│       ├── file_generator_worker.py  # File summaries
 │       └── extractors/aws_textract.py
 ├── mcp-server/              # LLM tools (used as library)
 │   └── src/mcp_server/
@@ -306,7 +315,7 @@ docker-compose -f docker/docker-compose.yml up -d
 
 **Supervisord manages:**
 - API Server (port 8000)
-- Document Processor (5 workers)
+- Document Processor (7 workers)
 - Web UI (port 5173)
 - PostgreSQL (via socket or TCP)
 
@@ -330,16 +339,17 @@ Full OpenAPI docs: `http://localhost:8000/docs`
 
 ## Current Status (2025-11-30)
 
-### ✅ Completed (Phase 1C)
+### ✅ Completed (Phase 1C + 2A)
 - PostgreSQL database with asyncpg
-- 5-worker self-improving pipeline
+- 7-worker self-improving pipeline (OCR → Classify → Score → Summarize → Score → File → Generate)
 - AWS Textract OCR with block preservation
-- Dynamic document type classification
-- Prompt evolution system
-- API server with 5 endpoints
+- Dynamic document type classification with prompt evolution
+- Series-based filing with hybrid tag approach
+- File generation with collection summaries
+- API server with 30+ endpoints
 - Ionic React PWA (basic structure)
 - Docker deployment
-- 20/20 tests passing
+- Full database schema with series, files, and tags
 
 ### ⏳ In Progress (Phase 2B)
 - PWA camera to API integration
@@ -354,13 +364,82 @@ Full OpenAPI docs: `http://localhost:8000/docs`
 
 ---
 
+## Series-Based Filing System
+
+### Overview
+Documents are automatically organized into **series** - recurring collections of related documents from the same entity (e.g., monthly PG&E bills, State Farm insurance statements).
+
+### How It Works
+
+**FilingWorker Process:**
+1. Polls for documents with status='summarized'
+2. Calls `detect_series` MCP tool to analyze document and identify:
+   - Entity name (e.g., "Pacific Gas & Electric")
+   - Series type (e.g., "monthly_utility_bill")
+   - Frequency (monthly/quarterly/annual)
+   - Key metadata (account numbers, policy info)
+3. Creates or finds existing series in database
+4. Adds document to series via junction table
+5. Creates series-specific tag (e.g., "series:pge")
+6. Applies tag to document
+7. Creates file based on series tag
+8. Updates status to 'filed'
+
+**Hybrid Approach:**
+- **Series entities** track recurring relationships and metadata
+- **Tags** provide flexible, user-friendly organization
+- **Files** aggregate documents with matching tags into collections
+
+**Database Tables:**
+- `series` - Series entities with metadata
+- `document_series` - Many-to-many junction table
+- `tags` - Unique tags with usage statistics
+- `document_tags` - Document-tag associations
+- `files` - Auto-generated document collections
+- `file_documents` - File-document associations
+
+### FileGeneratorWorker
+Generates summaries for file collections:
+1. Polls for files with status='pending' or 'outdated'
+2. Fetches all documents matching file's tags
+3. Builds aggregated content (reverse chronological)
+4. Calls `summarize_file` MCP tool
+5. Updates file with summary and metadata
+6. Sets status='generated'
+
+**File Types:**
+- **LLM-generated**: Created automatically by FilingWorker
+- **User-created**: Manual file creation via API
+
+## Prompt Management System
+
+### Self-Improving Prompts
+All LLM interactions use database-stored prompts that evolve based on performance:
+
+**Prompt Types:**
+- `classifier` - Document type classification (single prompt)
+- `summarizer` - Type-specific summaries (one per document type)
+- `file_summarizer` - File collection summaries
+- `series_detector` - Series identification
+
+**Evolution Process:**
+1. Scorer workers evaluate LLM outputs
+2. Generate performance metrics and scores
+3. Suggest prompt improvements
+4. New prompt version created if score improves by ≥0.05
+5. Old versions archived (is_active=false)
+
+**Thresholds:**
+- Minimum 5 documents before scoring
+- Score improvement of 0.05 to update prompt
+- All versions retained for analysis
+
 ## References
 
 - **Getting Started:** [`START_HERE.md`](START_HERE.md)
-- **Current Status:** [`STATUS.md`](STATUS.md) (formerly PROGRESS.md + IMPLEMENTATION_PLAN.md)
-- **Worker Design:** [`DOCUMENT_PROCESSING_DESIGN.md`](DOCUMENT_PROCESSING_DESIGN.md)
+- **Current Status:** [`STATUS.md`](STATUS.md)
 - **Database Schema:** [`api-server/src/api_server/db/schema.sql`](api-server/src/api_server/db/schema.sql)
 
 ---
 
-**Last Updated:** 2025-11-30
+**Last Updated:** 2025-12-05

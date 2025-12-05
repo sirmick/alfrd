@@ -83,7 +83,11 @@ User adds document → Folder created in inbox (PENDING)
                      ↓
          SummarizerWorker → Type-specific summarization (SUMMARIZED)
                      ↓
-      SummarizerScorerWorker → Scores & evolves prompt (COMPLETED)
+      SummarizerScorerWorker → Scores & evolves prompt (SCORED_SUMMARY)
+                     ↓
+            FilingWorker → Series detection & tagging (FILED)
+                     ↓
+       FileGeneratorWorker → File summaries (COMPLETED)
 ```
 
 **Self-Improving Features:**
@@ -123,10 +127,12 @@ User adds document → Folder created in inbox (PENDING)
 - **🎯 Scorer workers** - Evaluate and improve classifier/summarizer prompts
 - **🏷️ Secondary tags** - Flexible classification (tax, university, utility, etc.)
 - **📝 Prompt versioning** - All prompt changes tracked with version history
-- **Worker pool architecture** - State-machine-driven parallel processing (5 workers)
+- **Worker pool architecture** - State-machine-driven parallel processing (7 workers)
 - **OCRWorker** - AWS Textract OCR with 95%+ accuracy
 - **ClassifierWorker** - DB-driven classification with new type suggestions
 - **SummarizerWorker** - Type-specific DB-driven summarization
+- **FilingWorker** - Automatic series detection and filing
+- **FileGeneratorWorker** - Collection summaries for related documents
 - **Folder-based document input** with `meta.json` metadata
 - **Block-level data preservation** (PAGE, LINE, WORD with bounding boxes)
 - **Multi-document folders** (process multiple images as single document)
@@ -395,8 +401,8 @@ See `api-server/src/api_server/db/schema.sql` for complete schema.
 - **Test Coverage**: 20/20 tests passing (PostgreSQL database module + pipeline integration)
 - **OCR Accuracy**: 95%+ with AWS Textract
 - **Processing Speed**: ~2-3 seconds per page
-- **Worker Architecture**: 5 workers (OCR, Classifier, ClassifierScorer, Summarizer, SummarizerScorer)
-- **MCP Integration**: Bedrock with Claude Sonnet 4 + Amazon Nova
+- **Worker Architecture**: 7 workers (OCR, Classifier, ClassifierScorer, Summarizer, SummarizerScorer, Filing, FileGenerator)
+- **MCP Integration**: Bedrock with Claude Sonnet 4 + Amazon Nova Lite
 - **Prompt Evolution**: Automatic improvement based on performance feedback
 - **Document Types**: 6 default types (bill, finance, school, event, junk, generic) + unlimited LLM-suggested types
 - **API Endpoints**: 5 endpoints (health, documents list/detail/file, upload-image)
@@ -418,7 +424,6 @@ MIT License - see `LICENSE` file for details.
 - **`START_HERE.md`** - Quick start guide
 - **`ARCHITECTURE.md`** - System architecture and design decisions
 - **`STATUS.md`** - Current status and development roadmap
-- **`DOCUMENT_PROCESSING_DESIGN.md`** - Worker pipeline architecture
 
 ---
 

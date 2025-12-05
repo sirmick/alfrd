@@ -203,7 +203,7 @@ function FilesPage() {
                   </div>
                   
                   <div style={{ fontSize: '0.85em', color: '#666', marginTop: '4px' }}>
-                    {file.document_count || 0} document{file.document_count !== 1 ? 's' : ''} • 
+                    {file.document_count ?? 0} document{(file.document_count ?? 0) !== 1 ? 's' : ''} •
                     Last updated: {formatDate(file.updated_at)}
                   </div>
                 </IonCardHeader>

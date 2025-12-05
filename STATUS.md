@@ -1,8 +1,8 @@
 # ALFRD - Current Status & Roadmap
 
-**Last Updated:** 2025-11-30 (PostgreSQL Migration Complete)
+**Last Updated:** 2025-12-05 (Series-Based Filing Complete)
 
-**Current Phase:** Phase 1C Complete ✅
+**Current Phase:** Phase 2A Complete ✅
 
 ---
 
@@ -10,10 +10,12 @@
 
 ### Phase 1C: Self-Improving Pipeline (Complete)
 
-1. **5-Worker Self-Improving Pipeline**
-   - OCRWorker → ClassifierWorker → ClassifierScorerWorker → SummarizerWorker → SummarizerScorerWorker
+1. **7-Worker Self-Improving Pipeline**
+   - OCRWorker → ClassifierWorker → ClassifierScorerWorker → SummarizerWorker → SummarizerScorerWorker → FilingWorker → FileGeneratorWorker
    - State-machine-driven polling (crash-resistant)
    - Configurable concurrency per worker type
+   - Series-based automatic filing
+   - File collection summaries
 
 2. **PostgreSQL Database**
    - asyncpg connection pooling (5-20 connections)
@@ -39,8 +41,15 @@
    - LLM suggestions for new types
    - Secondary tags for flexible organization
 
-6. **API Server**
-   - 5 REST endpoints (health, documents list/detail/file, upload-image)
+6. **Series-Based Filing System**
+   - Automatic series detection via LLM
+   - Hybrid approach: series entities + tags + files
+   - FilingWorker: Creates series, applies tags, generates files
+   - FileGeneratorWorker: Creates collection summaries
+   - Database tables: series, document_series, files, file_documents, tags, document_tags
+
+7. **API Server**
+   - 30+ REST endpoints (documents, series, files, tags, prompts, etc.)
    - FastAPI with asyncio
    - OpenAPI documentation at `/docs`
    - File serving with security checks
@@ -119,16 +128,16 @@
 
 ## Statistics
 
-**Lines of Code:** ~5,700+ lines
-- Document Processor: ~800 lines (core)
-- Worker Infrastructure: ~1,700 lines (5 workers + scorers)
-- MCP Server: ~400 lines (tools + Bedrock client)
-- API Server: ~452 lines
+**Lines of Code:** ~8,000+ lines
+- Document Processor: ~1,200 lines (core + 7 workers)
+- Worker Infrastructure: ~2,300 lines (7 workers + scorers + filing)
+- MCP Server: ~600 lines (tools + Bedrock client + series detection)
+- API Server: ~1,216 lines (30+ endpoints)
 - Web UI: ~706 lines (3 fully functional pages)
-- Database Layer: ~674 lines (shared/database.py)
+- Database Layer: ~1,776 lines (shared/database.py with series/files/tags)
 - Tests: ~850 lines
 - Helper Scripts: ~750 lines
-- Database Schema: ~246 lines (PostgreSQL)
+- Database Schema: ~666 lines (PostgreSQL with series, files, tags)
 
 **Test Coverage:** 20/20 tests passing (100% database module)
 
@@ -136,7 +145,9 @@
 - ✅ OCR: 98.47% confidence (AWS Textract)
 - ✅ Classification: 95% confidence as "bill"
 - ✅ Prompt Evolution: Classifier v1→v2 (score: 0.85), Bill Summarizer v1→v2 (score: 0.85)
-- ✅ Full Pipeline: pending → completed (all 5 workers)
+- ✅ Full Pipeline: pending → filed → completed (all 7 workers)
+- ✅ Series Detection: Automatic entity and series_type identification
+- ✅ File Generation: Collection summaries with aggregated content
 
 ---
 
@@ -285,7 +296,7 @@ inbox/doc-folder/
 ```
 esec/
 ├── api-server/              # FastAPI REST API
-├── document-processor/      # 5-worker pipeline
+├── document-processor/      # 7-worker pipeline
 ├── mcp-server/              # LLM tools (library)
 ├── web-ui/                  # Ionic React PWA
 ├── shared/                  # Database + config
@@ -296,30 +307,32 @@ esec/
 │   ├── documents/          # Processed output
 │   └── postgres/           # PostgreSQL data
 └── docs/
-    ├── ARCHITECTURE.md     # System design
+    ├── ARCHITECTURE.md     # System design (consolidated)
     ├── STATUS.md           # This file
-    ├── DOCUMENT_PROCESSING_DESIGN.md
     ├── START_HERE.md       # User guide
     └── README.md           # Project overview
 ```
 
 ---
 
-## Recent Changes (2025-11-30)
+## Recent Changes (2025-12-05)
 
-### PostgreSQL Migration
-- PostgreSQL 15 with asyncpg connection pooling
-- Added asyncpg connection pooling
-- Implemented full-text search with GIN indexes
-- Created 20 comprehensive tests
-- Updated all documentation
+### Series-Based Filing Implementation (Phase 2A)
+- Added FilingWorker for automatic series detection and filing
+- Added FileGeneratorWorker for collection summaries
+- Implemented hybrid filing: series entities + tags + files
+- Extended database schema with series, files, tags tables
+- Expanded database.py from 674 to 1,776 lines
+- Updated API server with 30+ endpoints
+- 7-worker pipeline complete
 
-### Documentation Streamlining
-- Reduced ARCHITECTURE.md from 1572 to 369 lines
-- Merged PROGRESS.md + IMPLEMENTATION_PLAN.md into STATUS.md
-- Removed self-evident code blocks and historical commits
-- Focused on design decisions, current status, next steps
+### Documentation Consolidation (2025-12-05)
+- Deleted obsolete files: PROGRESS.md, IMPLEMENTATION_PLAN.md, DOCUMENT_PROCESSING_DESIGN.md, PROMPT_MANAGEMENT_DESIGN.md, PROMPT_MANAGEMENT_IMPLEMENTATION.md, SERIES_BASED_FILING_DESIGN.md
+- Consolidated all design details into ARCHITECTURE.md
+- Updated ARCHITECTURE.md with series-based filing and prompt management sections
+- Fixed worker counts throughout documentation (5 → 7 workers)
+- Updated pipeline diagrams and status flows
 
 ---
 
-**Status:** Phase 1C complete! Self-improving prompt architecture with production-ready PostgreSQL database. Next: Complete PWA integration for mobile photo capture.
+**Status:** Phase 2A complete! 7-worker pipeline with series-based filing, file generation, and self-improving prompts. Next: Complete PWA integration for mobile photo capture.

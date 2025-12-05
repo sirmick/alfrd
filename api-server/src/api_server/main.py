@@ -956,6 +956,242 @@ async def regenerate_series(series_id: str, database: AlfrdDatabase = Depends(ge
         raise HTTPException(status_code=500, detail=f"Error regenerating series: {str(e)}")
 
 
+# ==========================================
+# PROMPT MANAGEMENT ENDPOINTS
+# ==========================================
+
+@app.get("/api/v1/prompts")
+async def list_prompts(
+    prompt_type: Optional[str] = Query(None, description="Filter by prompt type (classifier, summarizer, file_summarizer, series_detector)"),
+    document_type: Optional[str] = Query(None, description="Filter by document type"),
+    include_inactive: bool = Query(False, description="Include inactive prompts"),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    List all prompts with optional filtering.
+    
+    Query Parameters:
+        - prompt_type: Filter by prompt type
+        - document_type: Filter by document type
+        - include_inactive: Include inactive prompts
+    
+    Returns:
+        List of prompts with metadata
+    """
+    logger.info(f"GET /api/v1/prompts - type={prompt_type}, doc_type={document_type}, include_inactive={include_inactive}")
+    try:
+        prompts = await database.list_prompts(
+            prompt_type=prompt_type,
+            document_type=document_type,
+            include_inactive=include_inactive
+        )
+        
+        # Convert UUIDs to strings
+        for prompt in prompts:
+            prompt['id'] = str(prompt['id'])
+        
+        return {
+            "prompts": prompts,
+            "count": len(prompts)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error listing prompts: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error listing prompts: {str(e)}")
+
+
+@app.get("/api/v1/prompts/active")
+async def get_active_prompts(
+    prompt_type: Optional[str] = Query(None, description="Filter by prompt type"),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    Get all active prompts (one per prompt_type/document_type combination).
+    
+    Query Parameters:
+        - prompt_type: Filter by prompt type
+    
+    Returns:
+        List of active prompts
+    """
+    logger.info(f"GET /api/v1/prompts/active - type={prompt_type}")
+    try:
+        prompts = await database.list_prompts(
+            prompt_type=prompt_type,
+            include_inactive=False
+        )
+        
+        # Convert UUIDs to strings
+        for prompt in prompts:
+            prompt['id'] = str(prompt['id'])
+        
+        return {
+            "prompts": prompts,
+            "count": len(prompts)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting active prompts: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error getting active prompts: {str(e)}")
+
+
+@app.get("/api/v1/prompts/{prompt_id}")
+async def get_prompt(prompt_id: str, database: AlfrdDatabase = Depends(get_db)):
+    """
+    Get a specific prompt by ID.
+    
+    Path Parameters:
+        - prompt_id: UUID of the prompt
+    
+    Returns:
+        Complete prompt record
+    """
+    logger.info(f"GET /api/v1/prompts/{prompt_id}")
+    try:
+        # Parse UUID
+        try:
+            prompt_uuid = UUID(prompt_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid prompt ID format: {prompt_id}")
+        
+        # Get all prompts and find the one with matching ID
+        all_prompts = await database.list_prompts(include_inactive=True)
+        prompt = next((p for p in all_prompts if p['id'] == prompt_uuid), None)
+        
+        if not prompt:
+            raise HTTPException(status_code=404, detail=f"Prompt not found: {prompt_id}")
+        
+        # Convert UUID to string
+        prompt['id'] = str(prompt['id'])
+        
+        return prompt
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting prompt: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error getting prompt: {str(e)}")
+
+
+@app.post("/api/v1/prompts")
+async def create_prompt(
+    prompt_type: str = Query(..., description="Type of prompt (classifier, summarizer, file_summarizer, series_detector)"),
+    prompt_text: str = Query(..., description="The prompt text"),
+    document_type: Optional[str] = Query(None, description="Document type (for summarizers)"),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    Create a new prompt version.
+    
+    Query Parameters:
+        - prompt_type: Type of prompt
+        - prompt_text: The prompt text
+        - document_type: Document type (required for summarizers)
+    
+    Returns:
+        Created prompt record
+    """
+    logger.info(f"POST /api/v1/prompts - type={prompt_type}, doc_type={document_type}")
+    try:
+        # Validate prompt_type
+        valid_types = ['classifier', 'summarizer', 'file_summarizer', 'series_detector']
+        if prompt_type not in valid_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid prompt_type. Must be one of: {', '.join(valid_types)}"
+            )
+        
+        # Validate document_type for summarizers
+        if prompt_type == 'summarizer' and not document_type:
+            raise HTTPException(
+                status_code=400,
+                detail="document_type is required for summarizer prompts"
+            )
+        
+        # Get existing prompts to determine next version
+        existing = await database.list_prompts(
+            prompt_type=prompt_type,
+            document_type=document_type,
+            include_inactive=True
+        )
+        
+        # Calculate next version
+        max_version = 0
+        for p in existing:
+            if p['version'] > max_version:
+                max_version = p['version']
+        next_version = max_version + 1
+        
+        # Deactivate old versions
+        await database.deactivate_old_prompts(prompt_type, document_type)
+        
+        # Create new prompt
+        prompt_id = uuid.uuid4()
+        await database.create_prompt(
+            prompt_id=prompt_id,
+            prompt_type=prompt_type,
+            prompt_text=prompt_text,
+            document_type=document_type,
+            version=next_version,
+            performance_score=0.5  # Default initial score
+        )
+        
+        # Fetch and return the created prompt
+        all_prompts = await database.list_prompts(include_inactive=True)
+        prompt = next((p for p in all_prompts if p['id'] == prompt_id), None)
+        
+        if prompt:
+            prompt['id'] = str(prompt['id'])
+        
+        return {
+            "prompt": prompt,
+            "message": f"Created prompt version {next_version}"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating prompt: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error creating prompt: {str(e)}")
+
+
+@app.get("/api/v1/document-types")
+async def list_document_types(
+    active_only: bool = Query(True, description="Only return active document types"),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    List all document types.
+    
+    Query Parameters:
+        - active_only: Only return active types
+    
+    Returns:
+        List of document types
+    """
+    logger.info(f"GET /api/v1/document-types - active_only={active_only}")
+    try:
+        types = await database.get_document_types(active_only=active_only)
+        
+        # Convert UUIDs to strings
+        for dt in types:
+            dt['id'] = str(dt['id'])
+        
+        return {
+            "document_types": types,
+            "count": len(types)
+        }
+    
+    except Exception as e:
+        logger.error(f"Error listing document types: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error listing document types: {str(e)}")
+
+
 def run_server():
     """Run the uvicorn server."""
     print(f"🚀 Starting esec API Server")
