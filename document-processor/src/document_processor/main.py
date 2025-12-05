@@ -19,6 +19,7 @@ from document_processor.ocr_worker import OCRWorker
 from document_processor.classifier_worker import ClassifierWorker
 from document_processor.scorer_workers import ClassifierScorerWorker, SummarizerScorerWorker
 from document_processor.summarizer_worker import SummarizerWorker
+from document_processor.filing_worker import FilingWorker
 from document_processor.file_generator_worker import FileGeneratorWorker
 
 # Set up logging
@@ -164,6 +165,7 @@ async def main(run_once: bool = False):
     print(f"   Classifier Workers: {settings.classifier_workers} (poll every {settings.classifier_poll_interval}s)")
     print(f"   Classifier Scorer Workers: {settings.classifier_scorer_workers} (poll every {settings.classifier_scorer_poll_interval}s)")
     print(f"   Summarizer Workers: {settings.summarizer_workers} (poll every {settings.summarizer_poll_interval}s)")
+    print(f"   Filing Workers: {settings.filing_workers} (poll every {settings.filing_poll_interval}s)")
     print(f"   Summarizer Scorer Workers: {settings.summarizer_scorer_workers} (poll every {settings.summarizer_scorer_poll_interval}s)")
     print(f"   File Generator Workers: {getattr(settings, 'file_generator_workers', 2)} (poll every {getattr(settings, 'file_generator_poll_interval', 15)}s)")
     print()
@@ -212,10 +214,13 @@ async def main(run_once: bool = False):
         # 4. Summarizer - Generic summarization using type-specific DB prompts
         pool.add_worker(SummarizerWorker(settings, db))
         
-        # 5. Summarizer Scorer - Score summary and evolve prompt
+        # 5. Filing - Create LLM files based on document tags
+        pool.add_worker(FilingWorker(settings, db))
+        
+        # 6. Summarizer Scorer - Score summary and evolve prompt
         pool.add_worker(SummarizerScorerWorker(settings, db))
         
-        # 6. File Generator - Generate summaries for file collections
+        # 7. File Generator - Generate summaries for file collections
         pool.add_worker(FileGeneratorWorker(settings, db))
         
         print()

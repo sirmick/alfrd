@@ -43,12 +43,18 @@ class AlfrdDatabase:
         """Initialize the connection pool with JSONB type codec."""
         if self.pool is None:
             async def init_connection(conn):
-                """Set up JSONB codec for each connection."""
+                """Set up JSONB codec for each connection.
+                
+                This is called for EVERY new connection in the pool,
+                ensuring consistent JSONB handling across all connections.
+                """
+                # Register JSONB codec to automatically convert between Python dict and JSONB
                 await conn.set_type_codec(
                     'jsonb',
-                    encoder=json.dumps,
-                    decoder=json.loads,
-                    schema='pg_catalog'
+                    encoder=json.dumps,  # Python dict -> JSON string -> JSONB binary
+                    decoder=json.loads,  # JSONB binary -> JSON string -> Python dict
+                    schema='pg_catalog',
+                    format='text'  # Explicitly use text format for compatibility
                 )
             
             self.pool = await asyncpg.create_pool(
@@ -56,7 +62,7 @@ class AlfrdDatabase:
                 min_size=self.pool_min_size,
                 max_size=self.pool_max_size,
                 timeout=self.pool_timeout,
-                init=init_connection
+                init=init_connection  # This callback runs for EVERY new connection
             )
     
     async def close(self):
@@ -359,7 +365,19 @@ class AlfrdDatabase:
                 WHERE id = $1
             """, doc_id)
             
-            return dict(row) if row else None
+            if not row:
+                return None
+            
+            # Convert to dict and parse structured_data if needed
+            doc = dict(row)
+            if doc.get('structured_data') and isinstance(doc['structured_data'], str):
+                import json
+                try:
+                    doc['structured_data'] = json.loads(doc['structured_data'])
+                except (json.JSONDecodeError, TypeError):
+                    doc['structured_data'] = {}
+            
+            return doc
     
     async def get_document_paths(self, doc_id: UUID) -> Optional[Dict[str, str]]:
         """Get document file paths for serving files.
@@ -446,20 +464,24 @@ class AlfrdDatabase:
             # Normalize tags for matching
             normalized_tags = [self.normalize_tag(tag) for tag in tags]
             
-            # Query with JOIN for performance - only filter by tags, NOT document_type
-            # This allows files to aggregate documents of different types with same tags
+            # Query with COUNT to ensure documents have ALL specified tags
+            # Documents must match ALL tags to be included
             query = f"""
                 SELECT DISTINCT d.id, d.filename, d.created_at, d.document_type,
                        d.summary, d.structured_data, d.extracted_text
                 FROM documents d
-                INNER JOIN document_tags dt ON d.id = dt.document_id
-                INNER JOIN tags t ON dt.tag_id = t.id
-                WHERE t.tag_normalized = ANY($1::text[])
-                  AND d.status = 'completed'
+                WHERE d.status = 'completed'
+                  AND (
+                    SELECT COUNT(DISTINCT t.tag_normalized)
+                    FROM document_tags dt
+                    INNER JOIN tags t ON dt.tag_id = t.id
+                    WHERE dt.document_id = d.id
+                      AND t.tag_normalized = ANY($1::text[])
+                  ) = $2
                 ORDER BY d.{order_by}
-                LIMIT $2
+                LIMIT $3
             """
-            params = [normalized_tags, limit]
+            params = [normalized_tags, len(normalized_tags), limit]
         else:
             # No tags specified, just filter by type and status
             if document_type:
@@ -892,17 +914,18 @@ class AlfrdDatabase:
                 LEFT JOIN LATERAL (
                     SELECT DISTINCT d.id
                     FROM documents d
-                    INNER JOIN document_tags dt ON d.id = dt.document_id
-                    INNER JOIN tags t ON dt.tag_id = t.id
-                    WHERE t.tag_normalized = ANY(
-                        SELECT unnest(
-                            string_to_array(
-                                substring(f.tag_signature from position(':' in f.tag_signature) + 1),
-                                ':'
+                    WHERE d.status = 'completed'
+                      AND (
+                        SELECT COUNT(DISTINCT t.tag_normalized)
+                        FROM document_tags dt
+                        INNER JOIN tags t ON dt.tag_id = t.id
+                        WHERE dt.document_id = d.id
+                          AND t.tag_normalized = ANY(
+                            SELECT unnest(
+                                string_to_array(f.tag_signature, ':')
                             )
-                        )
-                    )
-                    AND d.status = 'completed'
+                          )
+                      ) = array_length(string_to_array(f.tag_signature, ':'), 1)
                 ) d ON true
                 WHERE f.id = $1
                 GROUP BY f.id, f.tags, f.tag_signature,
@@ -983,16 +1006,22 @@ class AlfrdDatabase:
             # This returns ALL documents matching ANY of the tags
             normalized_tags = [self.normalize_tag(tag) for tag in tags]
             
+            # Count how many of the file's tags each document has
+            # Only return documents that have ALL the file's tags
             rows = await conn.fetch("""
                 SELECT DISTINCT d.id, d.filename, d.created_at, d.document_type,
                        d.summary, d.structured_data
                 FROM documents d
-                INNER JOIN document_tags dt ON d.id = dt.document_id
-                INNER JOIN tags t ON dt.tag_id = t.id
-                WHERE t.tag_normalized = ANY($1::text[])
-                  AND d.status = 'completed'
+                WHERE d.status = 'completed'
+                  AND (
+                    SELECT COUNT(DISTINCT t.tag_normalized)
+                    FROM document_tags dt
+                    INNER JOIN tags t ON dt.tag_id = t.id
+                    WHERE dt.document_id = d.id
+                      AND t.tag_normalized = ANY($1::text[])
+                  ) = $2
                 ORDER BY d.{order_by}
-            """.format(order_by=order_by), normalized_tags)
+            """.format(order_by=order_by), normalized_tags, len(normalized_tags))
             
             # Parse JSONB fields and fetch tags for each document
             results = []
@@ -1157,17 +1186,18 @@ class AlfrdDatabase:
             LEFT JOIN LATERAL (
                 SELECT DISTINCT d.id
                 FROM documents d
-                INNER JOIN document_tags dt ON d.id = dt.document_id
-                INNER JOIN tags t ON dt.tag_id = t.id
-                WHERE t.tag_normalized = ANY(
-                    SELECT unnest(
-                        string_to_array(
-                            substring(f.tag_signature from position(':' in f.tag_signature) + 1),
-                            ':'
+                WHERE d.status = 'completed'
+                  AND (
+                    SELECT COUNT(DISTINCT t.tag_normalized)
+                    FROM document_tags dt
+                    INNER JOIN tags t ON dt.tag_id = t.id
+                    WHERE dt.document_id = d.id
+                      AND t.tag_normalized = ANY(
+                        SELECT unnest(
+                            string_to_array(f.tag_signature, ':')
                         )
-                    )
-                )
-                AND d.status = 'completed'
+                      )
+                  ) = array_length(string_to_array(f.tag_signature, ':'), 1)
             ) d ON true
             {where_clause}
             GROUP BY f.id, f.tags, f.tag_signature,
@@ -1191,6 +1221,332 @@ class AlfrdDatabase:
         
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM files WHERE id = $1", file_id)
+    
+    # ==========================================
+    # SERIES OPERATIONS
+    # ==========================================
+    
+    async def create_series(
+        self,
+        series_id: UUID,
+        title: str,
+        entity: str,
+        series_type: str,
+        frequency: str = None,
+        description: str = None,
+        metadata: dict = None,
+        user_id: str = None,
+        source: str = 'llm'
+    ) -> UUID:
+        """Create a new series.
+        
+        Args:
+            series_id: Series UUID
+            title: Human-readable series title
+            entity: Entity name (e.g., "State Farm Insurance")
+            series_type: Series type (e.g., "monthly_insurance_bill")
+            frequency: Recurrence frequency (monthly, quarterly, annual, etc.)
+            description: LLM-generated description
+            metadata: Structured metadata as dict
+            user_id: User ID for multi-user support
+            source: 'llm' or 'user'
+            
+        Returns:
+            Series UUID
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO series (
+                    id, title, entity, series_type, frequency,
+                    description, metadata, status, user_id, source,
+                    document_count, created_at, updated_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, 0, $10, $11)
+                ON CONFLICT (entity, series_type, user_id) DO NOTHING
+            """,
+                series_id, title, entity, series_type, frequency,
+                description, metadata, user_id, source,
+                utc_now(), utc_now()
+            )
+        
+        return series_id
+    
+    async def find_or_create_series(
+        self,
+        series_id: UUID,
+        entity: str,
+        series_type: str,
+        title: str,
+        frequency: str = None,
+        description: str = None,
+        metadata: dict = None,
+        user_id: str = None
+    ) -> Dict[str, Any]:
+        """Find existing series or create new one.
+        
+        Args:
+            series_id: Series UUID to use if creating
+            entity: Entity name
+            series_type: Series type
+            title: Series title
+            frequency: Recurrence frequency
+            description: Description
+            metadata: Metadata dict
+            user_id: User ID
+            
+        Returns:
+            Series record dict
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            # Try to find existing series
+            row = await conn.fetchrow("""
+                SELECT id, title, entity, series_type, frequency,
+                       description, metadata, document_count,
+                       first_document_date, last_document_date,
+                       expected_frequency_days, summary_text, summary_metadata,
+                       status, user_id, source, created_at, updated_at, last_generated_at
+                FROM series
+                WHERE entity = $1 AND series_type = $2
+                  AND (user_id = $3 OR ($3 IS NULL AND user_id IS NULL))
+            """, entity, series_type, user_id)
+            
+            if row:
+                return dict(row)
+            
+            # Create new series
+            await self.create_series(
+                series_id, title, entity, series_type, frequency,
+                description, metadata, user_id
+            )
+            
+            # Fetch and return new series
+            row = await conn.fetchrow("""
+                SELECT id, title, entity, series_type, frequency,
+                       description, metadata, document_count,
+                       status, user_id, source, created_at, updated_at
+                FROM series
+                WHERE id = $1
+            """, series_id)
+            
+            return dict(row)
+    
+    async def get_series(self, series_id: UUID) -> Optional[Dict[str, Any]]:
+        """Get series by ID.
+        
+        Args:
+            series_id: Series UUID
+            
+        Returns:
+            Series dict or None if not found
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, title, entity, series_type, frequency,
+                       description, metadata, document_count,
+                       first_document_date, last_document_date,
+                       expected_frequency_days, summary_text, summary_metadata,
+                       status, user_id, source, created_at, updated_at, last_generated_at
+                FROM series
+                WHERE id = $1
+            """, series_id)
+            
+            return dict(row) if row else None
+    
+    async def list_series(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        entity: str = None,
+        series_type: str = None,
+        frequency: str = None,
+        status: str = None,
+        user_id: str = None
+    ) -> List[Dict[str, Any]]:
+        """List series with optional filtering.
+        
+        Args:
+            limit: Maximum number of series
+            offset: Pagination offset
+            entity: Filter by entity name
+            series_type: Filter by series type
+            frequency: Filter by frequency
+            status: Filter by status
+            user_id: Filter by user
+            
+        Returns:
+            List of series dicts
+        """
+        await self.initialize()
+        
+        conditions = []
+        params = []
+        param_count = 1
+        
+        if entity:
+            conditions.append(f"entity = ${param_count}")
+            params.append(entity)
+            param_count += 1
+        
+        if series_type:
+            conditions.append(f"series_type = ${param_count}")
+            params.append(series_type)
+            param_count += 1
+        
+        if frequency:
+            conditions.append(f"frequency = ${param_count}")
+            params.append(frequency)
+            param_count += 1
+        
+        if status:
+            conditions.append(f"status = ${param_count}")
+            params.append(status)
+            param_count += 1
+        
+        if user_id is not None:
+            conditions.append(f"(user_id = ${param_count} OR (${param_count} IS NULL AND user_id IS NULL))")
+            params.append(user_id)
+            param_count += 1
+        
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        
+        params.extend([limit, offset])
+        
+        query = f"""
+            SELECT id, title, entity, series_type, frequency,
+                   description, metadata, document_count,
+                   first_document_date, last_document_date,
+                   status, created_at, updated_at
+            FROM series
+            {where_clause}
+            ORDER BY last_document_date DESC NULLS LAST, updated_at DESC
+            LIMIT ${param_count} OFFSET ${param_count + 1}
+        """
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+            return [dict(row) for row in rows]
+    
+    async def update_series(self, series_id: UUID, **fields):
+        """Update series fields.
+        
+        Args:
+            series_id: Series UUID
+            **fields: Fields to update (key=value pairs)
+        """
+        await self.initialize()
+        
+        if not fields:
+            return
+        
+        import json
+        
+        # JSONB fields that need JSON serialization
+        jsonb_fields = {'metadata', 'summary_metadata'}
+        
+        # Serialize JSONB fields
+        values = []
+        for key, value in fields.items():
+            if key in jsonb_fields and value is not None and not isinstance(value, str):
+                values.append(json.dumps(value))
+            else:
+                values.append(value)
+        
+        # Build dynamic UPDATE query
+        set_clauses = [f"{key} = ${i+2}" for i, key in enumerate(fields.keys())]
+        set_clause = ", ".join(set_clauses)
+        
+        query = f"""
+            UPDATE series
+            SET {set_clause}, updated_at = ${len(values) + 2}
+            WHERE id = $1
+        """
+        
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, series_id, *values, utc_now())
+    
+    async def add_document_to_series(
+        self,
+        series_id: UUID,
+        document_id: UUID,
+        added_by: str = 'llm'
+    ):
+        """Add document to series.
+        
+        Args:
+            series_id: Series UUID
+            document_id: Document UUID
+            added_by: 'llm' or 'user'
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            # Check if already exists
+            exists = await conn.fetchval("""
+                SELECT 1 FROM document_series
+                WHERE document_id = $1 AND series_id = $2
+            """, document_id, series_id)
+            
+            if not exists:
+                await conn.execute("""
+                    INSERT INTO document_series (document_id, series_id, added_at, added_by)
+                    VALUES ($1, $2, $3, $4)
+                """, document_id, series_id, utc_now(), added_by)
+    
+    async def get_series_documents(
+        self,
+        series_id: UUID,
+        order_by: str = "created_at ASC"
+    ) -> List[Dict[str, Any]]:
+        """Get all documents in a series.
+        
+        Args:
+            series_id: Series UUID
+            order_by: SQL ORDER BY clause
+            
+        Returns:
+            List of document dicts
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(f"""
+                SELECT d.id, d.filename, d.created_at, d.document_type,
+                       d.summary, d.structured_data, ds.added_at, ds.added_by
+                FROM documents d
+                INNER JOIN document_series ds ON d.id = ds.document_id
+                WHERE ds.series_id = $1
+                ORDER BY d.{order_by}
+            """, series_id)
+            
+            # Parse JSONB fields
+            results = []
+            for row in rows:
+                doc = dict(row)
+                if doc.get('structured_data') and isinstance(doc['structured_data'], str):
+                    import json
+                    try:
+                        doc['structured_data'] = json.loads(doc['structured_data'])
+                    except (json.JSONDecodeError, TypeError):
+                        doc['structured_data'] = {}
+                results.append(doc)
+            
+            return results
+    
+    async def delete_series(self, series_id: UUID):
+        """Delete series (cascade deletes document_series).
+        
+        Args:
+            series_id: Series UUID
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM series WHERE id = $1", series_id)
     
     # ==========================================
     # UTILITY OPERATIONS

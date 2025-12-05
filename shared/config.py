@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     summarizer_scorer_workers: int = 2
     summarizer_scorer_poll_interval: int = 5  # seconds
     
+    # Filing workers (create LLM files based on tags)
+    filing_workers: int = 3
+    filing_poll_interval: int = 2  # seconds
+    
     # Worker batch sizes (documents to fetch per poll)
     worker_batch_multiplier: int = 2  # batch_size = workers * multiplier
     

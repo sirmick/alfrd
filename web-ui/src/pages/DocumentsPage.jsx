@@ -129,6 +129,9 @@ function DocumentsPage() {
     <IonPage>
       <IonHeader>
         <IonToolbar>
+          <div slot="start" style={{ display: 'flex', alignItems: 'center', marginLeft: '10px' }}>
+            <img src="/ALFRD.svg" alt="ALFRD Logo" style={{ height: '32px', width: 'auto' }} />
+          </div>
           <IonTitle>ALFRD Documents</IonTitle>
           <IonButton slot="end" fill="clear" onClick={fetchDocuments}>
             <IonIcon icon={refresh} />

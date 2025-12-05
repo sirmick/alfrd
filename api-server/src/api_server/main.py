@@ -356,6 +356,7 @@ async def get_document(document_id: str, database: AlfrdDatabase = Depends(get_d
             logger.warning(f"Failed to fetch tags for {doc_id_uuid}: {e}")
             doc['tags'] = []
         
+        # Ensure structured_data is an object (database layer handles JSON parsing)
         if doc.get('structured_data') is None:
             doc['structured_data'] = {}
         
@@ -568,9 +569,19 @@ async def list_files(
             user_id=None  # TODO: Add user support
         )
         
-        # Convert UUIDs to strings
+        # Convert UUIDs to strings and parse JSONB tags
         for file in files:
             file['id'] = str(file['id'])
+            
+            # Parse tags JSONB field to ensure it's an array
+            if file.get('tags'):
+                if isinstance(file['tags'], str):
+                    try:
+                        file['tags'] = json.loads(file['tags'])
+                    except (json.JSONDecodeError, TypeError):
+                        file['tags'] = []
+            else:
+                file['tags'] = []
         
         return {
             "files": files,
@@ -613,10 +624,20 @@ async def get_file(file_id: str, database: AlfrdDatabase = Depends(get_db)):
         # Get documents in file
         documents = await database.get_file_documents(file_uuid)
         
-        # Convert UUIDs to strings
+        # Convert UUIDs to strings and parse JSONB tags
         file_record['id'] = str(file_record['id'])
         if file_record.get('prompt_version'):
             file_record['prompt_version'] = str(file_record['prompt_version'])
+        
+        # Parse tags JSONB field to ensure it's an array
+        if file_record.get('tags'):
+            if isinstance(file_record['tags'], str):
+                try:
+                    file_record['tags'] = json.loads(file_record['tags'])
+                except (json.JSONDecodeError, TypeError):
+                    file_record['tags'] = []
+        else:
+            file_record['tags'] = []
         
         for doc in documents:
             doc['id'] = str(doc['id'])
@@ -789,6 +810,150 @@ async def search_tags(
         raise HTTPException(status_code=500, detail=f"Error searching tags: {str(e)}")
 
 
+
+
+# ==========================================
+# SERIES ENDPOINTS
+# ==========================================
+
+@app.get("/api/v1/series")
+async def list_series(
+    entity: Optional[str] = Query(None, description="Filter by entity name"),
+    series_type: Optional[str] = Query(None, description="Filter by series type"),
+    frequency: Optional[str] = Query(None, description="Filter by frequency"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    List all series with optional filtering.
+    
+    Query Parameters:
+        - entity: Filter by entity name
+        - series_type: Filter by series type
+        - frequency: Filter by frequency (monthly, quarterly, annual)
+        - status: Filter by status (active, completed, archived)
+        - limit: Max number of results
+        - offset: Pagination offset
+    
+    Returns:
+        List of series with metadata
+    """
+    logger.info(f"GET /api/v1/series - entity={entity}, type={series_type}")
+    try:
+        series_list = await database.list_series(
+            limit=limit,
+            offset=offset,
+            entity=entity,
+            series_type=series_type,
+            frequency=frequency,
+            status=status,
+            user_id=None  # TODO: Add user support
+        )
+        
+        # Convert UUIDs to strings
+        for series in series_list:
+            series['id'] = str(series['id'])
+        
+        return {
+            "series": series_list,
+            "count": len(series_list),
+            "limit": limit,
+            "offset": offset
+        }
+    
+    except Exception as e:
+        logger.error(f"Error listing series: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error listing series: {str(e)}")
+
+
+@app.get("/api/v1/series/{series_id}")
+async def get_series(series_id: str, database: AlfrdDatabase = Depends(get_db)):
+    """
+    Get details for a specific series including all documents.
+    
+    Path Parameters:
+        - series_id: UUID of the series
+    
+    Returns:
+        Series record with metadata and list of documents
+    """
+    logger.info(f"GET /api/v1/series/{series_id}")
+    try:
+        # Parse UUID
+        try:
+            series_uuid = UUID(series_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid series ID format: {series_id}")
+        
+        # Get series record
+        series = await database.get_series(series_uuid)
+        
+        if not series:
+            raise HTTPException(status_code=404, detail=f"Series not found: {series_id}")
+        
+        # Get documents in series
+        documents = await database.get_series_documents(series_uuid)
+        
+        # Convert UUIDs to strings
+        series['id'] = str(series['id'])
+        for doc in documents:
+            doc['id'] = str(doc['id'])
+        
+        return {
+            "series": series,
+            "documents": documents
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting series: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error getting series: {str(e)}")
+
+
+@app.post("/api/v1/series/{series_id}/regenerate")
+async def regenerate_series(series_id: str, database: AlfrdDatabase = Depends(get_db)):
+    """
+    Force regeneration of series summary.
+    
+    Path Parameters:
+        - series_id: UUID of the series
+    
+    Returns:
+        Status confirmation
+    """
+    logger.info(f"POST /api/v1/series/{series_id}/regenerate")
+    try:
+        # Parse UUID
+        try:
+            series_uuid = UUID(series_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid series ID format: {series_id}")
+        
+        # Check series exists
+        series = await database.get_series(series_uuid)
+        if not series:
+            raise HTTPException(status_code=404, detail=f"Series not found: {series_id}")
+        
+        # Mark as outdated to trigger regeneration
+        await database.update_series(series_uuid, status='active', last_generated_at=None)
+        
+        return {
+            "series_id": series_id,
+            "status": "queued",
+            "message": "Series queued for regeneration"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error regenerating series: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error regenerating series: {str(e)}")
 
 
 def run_server():

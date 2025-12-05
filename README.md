@@ -1,6 +1,10 @@
-# ALFRD - Automated Ledger & Filing Research Database
-
-> Your personal AI-powered document management system that ingests, processes, and summarizes documents automatically using AWS Textract OCR and LLM classification via AWS Bedrock.
+<div align="center">
+  <img src="ALFRD.svg" alt="ALFRD Logo" width="200" />
+  
+  # ALFRD - Automated Ledger & Filing Research Database
+  
+  > Your personal AI-powered document management system that ingests, processes, and summarizes documents automatically using AWS Textract OCR and LLM classification via AWS Bedrock.
+</div>
 
 ## What is ALFRD?
 

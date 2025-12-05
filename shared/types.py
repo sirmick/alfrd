@@ -19,6 +19,7 @@ class DocumentStatus(str, Enum):
     SUMMARIZING = "summarizing"                 # Generating summary
     SUMMARIZED = "summarized"                   # Summary generated
     SCORING_SUMMARY = "scoring_summary"         # Scoring summarizer performance
+    FILED = "filed"                             # NEW: Added to appropriate file(s)
     COMPLETED = "completed"                     # All processing done
     FAILED = "failed"                           # Error at any stage
 

@@ -260,7 +260,7 @@ class SummarizerScorerWorker(BaseWorker):
             settings=settings,
             db=db,
             worker_name="Summarizer Scorer Worker",
-            source_status=DocumentStatus.SUMMARIZED,
+            source_status=DocumentStatus.FILED,  # CHANGED: Now polls 'filed' instead of 'summarized'
             target_status=DocumentStatus.COMPLETED,
             concurrency=settings.summarizer_scorer_workers,
             poll_interval=settings.summarizer_scorer_poll_interval,
@@ -271,7 +271,7 @@ class SummarizerScorerWorker(BaseWorker):
         logger.info("Initialized Bedrock client for summarizer scoring")
     
     async def get_documents(self, status: DocumentStatus, limit: int) -> List[dict]:
-        """Query database for documents in 'summarized' status."""
+        """Query database for documents in 'filed' status."""
         documents = await self.db.get_documents_by_status(status, limit)
         
         # Parse structured_data from JSON string if needed

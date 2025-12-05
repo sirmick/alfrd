@@ -251,10 +251,13 @@ function FileDetailPage() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap', marginBottom: '8px' }}>
-                      <IonBadge color="primary">{file.document_type}</IonBadge>
-                      {Array.isArray(file.tags) && file.tags.map((tag, idx) => (
-                        <IonBadge key={idx} color="secondary">{tag}</IonBadge>
-                      ))}
+                      {Array.isArray(file.tags) && file.tags.length > 0 ? (
+                        file.tags.map((tag, idx) => (
+                          <IonBadge key={idx} color={idx === 0 ? "primary" : "secondary"}>{tag}</IonBadge>
+                        ))
+                      ) : (
+                        <IonBadge color="medium">No tags</IonBadge>
+                      )}
                     </div>
                     <div style={{ fontSize: '0.85em', color: '#666' }}>
                       {file.document_count || 0} document{file.document_count !== 1 ? 's' : ''} • 

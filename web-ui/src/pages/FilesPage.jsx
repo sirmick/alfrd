@@ -101,11 +101,11 @@ function FilesPage() {
   const filteredFiles = files.filter(file => {
     if (!searchQuery) return true
     const query = searchQuery.toLowerCase()
-    const tags = Array.isArray(file.tags) ? file.tags.join(' ') : ''
+    const tags = Array.isArray(file.tags) ? file.tags.join(' ').toLowerCase() : ''
     return (
-      file.document_type?.toLowerCase().includes(query) ||
-      tags.toLowerCase().includes(query) ||
-      file.summary_text?.toLowerCase().includes(query)
+      tags.includes(query) ||
+      file.summary_text?.toLowerCase().includes(query) ||
+      file.tag_signature?.toLowerCase().includes(query)
     )
   })
 
@@ -113,6 +113,9 @@ function FilesPage() {
     <IonPage>
       <IonHeader>
         <IonToolbar>
+          <div slot="start" style={{ display: 'flex', alignItems: 'center', marginLeft: '10px' }}>
+            <img src="/ALFRD.svg" alt="ALFRD Logo" style={{ height: '32px', width: 'auto' }} />
+          </div>
           <IonTitle>Files</IonTitle>
           <IonButton slot="end" fill="clear" onClick={fetchFiles}>
             <IonIcon icon={refresh} />
@@ -182,10 +185,13 @@ function FilesPage() {
                     <IonIcon icon={folder} style={{ fontSize: '24px', color: '#3880ff' }} />
                     <div style={{ flex: 1 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
-                        <IonBadge color="primary">{file.document_type}</IonBadge>
-                        {Array.isArray(file.tags) && file.tags.map((tag, idx) => (
-                          <IonBadge key={idx} color="secondary">{tag}</IonBadge>
-                        ))}
+                        {Array.isArray(file.tags) && file.tags.length > 0 ? (
+                          file.tags.map((tag, idx) => (
+                            <IonBadge key={idx} color={idx === 0 ? "primary" : "secondary"}>{tag}</IonBadge>
+                          ))
+                        ) : (
+                          <IonBadge color="medium">No tags</IonBadge>
+                        )}
                       </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
