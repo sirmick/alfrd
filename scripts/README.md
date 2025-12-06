@@ -27,13 +27,35 @@ Command-line utilities for ALFRD document management system.
 # Add multiple pages as one document
 ./scripts/add-document page1.jpg page2.jpg --tags invoice
 
-# View documents
-./scripts/view-document              # List all documents
-./scripts/view-document <doc-id>     # View specific document
+# View documents (no API server needed)
+./scripts/get-document                          # List all documents
+./scripts/get-document <doc-id>                 # View specific document
+./scripts/get-document --search "PG&E"          # Search documents
+./scripts/get-document --status processed       # Filter by status
+./scripts/get-document --type utility_bill      # Filter by type
+./scripts/get-document --stats                  # Show statistics
 
-# View prompts (classification and summarization)
-./scripts/view-prompts              # View all prompts
-./scripts/view-prompts --type classifier
+# View tags (no API server needed)
+./scripts/get-tags                              # List all tags
+./scripts/get-tags --popular                    # Show popular tags
+./scripts/get-tags --search "pge"               # Search tags
+
+# View series (no API server needed)
+./scripts/get-series                            # List all series
+./scripts/get-series <series-id>                # View specific series
+./scripts/get-series --entity "PG&E"            # Filter by entity
+./scripts/get-series --type utility             # Filter by type
+
+# View files (no API server needed)
+./scripts/get-files                             # List all files
+./scripts/get-files <file-id>                   # View specific file
+./scripts/get-files --tags series:pge           # Filter by tags
+./scripts/get-files --status generated          # Filter by status
+
+# View prompts (no API server needed)
+./scripts/view-prompts                          # View all prompts
+./scripts/view-prompts --type classifier        # View classifier prompts
+./scripts/view-prompts --all                    # Include archived versions
 ```
 
 ### AWS Utilities
@@ -72,9 +94,25 @@ Command-line utilities for ALFRD document management system.
 # 3. Add documents via CLI or Web UI
 ./scripts/add-document samples/pg\&e-bill.jpg --tags bill
 
-# 4. View processed results
-./scripts/view-document
+# 4. View processed results (no API server needed)
+./scripts/get-document              # List all documents
+./scripts/get-document --stats      # Show statistics
+./scripts/get-tags --popular        # View popular tags
+./scripts/get-series                # View detected series
+./scripts/get-files                 # View generated files
 ```
+
+## Direct Database Access
+
+The new `get-*` scripts provide fast access to database information without requiring the API server to be running. They use the same database access layer as the API endpoints but skip the HTTP overhead:
+
+- **get-document** - View, list, search documents with flexible filtering
+- **get-tags** - View all tags, popular tags, or search by keyword
+- **get-series** - View detected series and their documents
+- **get-files** - View generated files and their metadata
+- **view-prompts** - View prompt evolution history and performance
+
+All scripts support partial ID matching for convenience (e.g., `./scripts/get-document 5a8b` will match the full UUID).
 
 ## How They Work
 
@@ -89,7 +127,11 @@ Each script:
 **CLI Tools** are Python scripts in `document-processor/src/document_processor/cli/`:
 - `add-document.py` - Create inbox folders with metadata
 - `create-alfrd-db` - Initialize PostgreSQL database
-- `view-document.py` - Query and display documents
+- `get-document.py` - Query and display documents (direct DB access)
+- `get-tags.py` - View and search tags (direct DB access)
+- `get-series.py` - View series information (direct DB access)
+- `get-files.py` - View file information (direct DB access)
+- `view-prompts.py` - View prompt evolution history (direct DB access)
 
 **Service Scripts** launch the main application components:
 - `start-api` → `api-server/src/api_server/main.py`

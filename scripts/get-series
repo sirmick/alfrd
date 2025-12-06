@@ -1,0 +1,17 @@
+#!/bin/bash
+#
+# Get series information from database (no API server needed)
+#
+# Usage:
+#   ./scripts/get-series                    # List all series
+#   ./scripts/get-series <series_id>        # Get specific series
+#   ./scripts/get-series --entity "PG&E"    # Filter by entity
+#   ./scripts/get-series --type utility     # Filter by type
+#
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$PROJECT_ROOT"
+
+python3 document-processor/src/document_processor/cli/get-series.py "$@"

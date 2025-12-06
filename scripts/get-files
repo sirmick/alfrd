@@ -1,0 +1,17 @@
+#!/bin/bash
+#
+# Get file information from database (no API server needed)
+#
+# Usage:
+#   ./scripts/get-files                    # List all files
+#   ./scripts/get-files <file_id>          # Get specific file
+#   ./scripts/get-files --tags series:pge  # Filter by tags
+#   ./scripts/get-files --status generated # Filter by status
+#
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$PROJECT_ROOT"
+
+python3 document-processor/src/document_processor/cli/get-files.py "$@"
