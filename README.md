@@ -151,10 +151,19 @@ User adds document → Folder created in inbox (PENDING)
 - ✅ **Document detail** - Full metadata, OCR text, structured data display
 - ⏳ **Auto-polling** - Automatic status updates (currently manual refresh)
 
+### ✅ Phase 2B - JSON Data Extraction (Complete)
+
+- ✅ **JSON flattening utility** - Convert nested JSONB to pandas DataFrames
+- ✅ **CLI tool** - `analyze-file-data` for data extraction and CSV export
+- ✅ **API endpoint** - `/api/v1/files/{file_id}/flatten` for UI integration
+- ✅ **UI component** - DataTable for displaying flattened data in file view
+- ✅ **Array strategies** - Multiple approaches (flatten, json, first, count)
+- ✅ **Comprehensive tests** - 25+ test cases for all flattening scenarios
+
 ### ⏳ Phase 3 - Coming Soon
 
 - Hierarchical summaries (weekly → monthly → yearly)
-- Financial tracking with CSV exports
+- Financial tracking with advanced analytics
 - Integration tests for full pipeline
 - Real-time file watching (watchdog)
 - Analytics dashboard
@@ -176,8 +185,15 @@ alfrd/
 ├── scripts/
 │   ├── create-alfrd-db      # Database initialization (REQUIRED!)
 │   ├── add-document         # Add documents to inbox
+│   ├── analyze-file-data    # JSON flattening and data analysis
 │   └── start-processor      # Process documents wrapper
 ├── shared/                   # Shared configuration and types
+│   ├── database.py          # PostgreSQL client
+│   ├── json_flattener.py    # JSON to DataFrame conversion
+│   └── tests/
+│       └── test_json_flattener.py
+├── docs/
+│   └── JSON_FLATTENING.md   # JSON flattening documentation
 └── data/                    # Runtime data (not in git)
     ├── inbox/              # Document folders (input)
     ├── processed/          # Processed folders (archived)
@@ -397,19 +413,22 @@ See `api-server/src/api_server/db/schema.sql` for complete schema.
 
 ## Statistics
 
-- **Lines of Code**: ~5,700+ lines (core + workers + scorers + MCP tools + API + Web UI)
-- **Test Coverage**: 20/20 tests passing (PostgreSQL database module + pipeline integration)
+- **Lines of Code**: ~6,500+ lines (core + workers + scorers + MCP tools + API + Web UI + flattening)
+- **Test Coverage**: 45+ tests passing (PostgreSQL database + pipeline + JSON flattening)
 - **OCR Accuracy**: 95%+ with AWS Textract
 - **Processing Speed**: ~2-3 seconds per page
 - **Worker Architecture**: 7 workers (OCR, Classifier, ClassifierScorer, Summarizer, SummarizerScorer, Filing, FileGenerator)
 - **MCP Integration**: Bedrock with Claude Sonnet 4 + Amazon Nova Lite
 - **Prompt Evolution**: Automatic improvement based on performance feedback
 - **Document Types**: 6 default types (bill, finance, school, event, junk, generic) + unlimited LLM-suggested types
-- **API Endpoints**: 5 endpoints (health, documents list/detail/file, upload-image)
-- **Web UI**: Ionic React PWA with 3 fully functional pages (90% complete)
+- **API Endpoints**: 30+ endpoints (health, documents, files, series, tags, prompts, flattening)
+- **Web UI**: Ionic React PWA with data visualization
   - **CapturePage** (166 lines) - Camera capture, photo preview, upload
   - **DocumentsPage** (192 lines) - Document list with API integration
   - **DocumentDetailPage** (348 lines) - Full document details and metadata
+  - **FileDetailPage** - File view with flattened data table
+  - **DataTable Component** - Responsive table for flattened JSONB data
+- **Data Analysis**: JSON flattening utility with 4 array strategies and pandas integration
 
 ## Contributing
 
@@ -424,6 +443,7 @@ MIT License - see `LICENSE` file for details.
 - **`START_HERE.md`** - Quick start guide
 - **`ARCHITECTURE.md`** - System architecture and design decisions
 - **`STATUS.md`** - Current status and development roadmap
+- **`docs/JSON_FLATTENING.md`** - JSON flattening utilities guide
 
 ---
 

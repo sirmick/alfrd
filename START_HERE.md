@@ -351,7 +351,7 @@ pytest shared/tests/test_database.py -v
 esec/
 ├── api-server/              # FastAPI REST API
 │   ├── src/api_server/
-│   │   ├── main.py         # API server entry point
+│   │   ├── main.py         # API server entry point (30+ endpoints)
 │   │   └── db/schema.sql   # PostgreSQL schema
 │   └── tests/
 ├── document-processor/      # Document processing workers
@@ -371,21 +371,31 @@ esec/
 │       └── llm/bedrock.py   # AWS Bedrock client
 ├── web-ui/                  # Ionic React PWA
 │   ├── src/
+│   │   ├── components/
+│   │   │   └── DataTable.jsx         # Flattened data table
 │   │   ├── pages/          # UI pages
+│   │   │   └── FileDetailPage.jsx    # Shows data table
 │   │   └── App.jsx         # Main app component
 │   └── public/
 ├── shared/                  # Shared utilities
 │   ├── config.py           # Configuration
 │   ├── database.py         # PostgreSQL client
+│   ├── json_flattener.py   # JSONB to DataFrame conversion
 │   ├── constants.py        # Shared constants
-│   └── types.py            # Type definitions
+│   ├── types.py            # Type definitions
+│   └── tests/
+│       ├── test_database.py
+│       └── test_json_flattener.py    # 25+ flattening tests
 ├── scripts/                 # CLI utilities
 │   ├── add-document        # Add documents to inbox
 │   ├── view-document       # View processed documents
 │   ├── view-prompts        # View prompt evolution
+│   ├── analyze-file-data   # Extract & analyze JSONB data
 │   ├── start-api           # Start API server
 │   ├── start-processor     # Start workers
 │   └── start-webui         # Start web UI
+├── docs/
+│   └── JSON_FLATTENING.md  # Data extraction guide
 ├── docker/                  # Docker configuration
 │   ├── Dockerfile
 │   ├── docker-compose.yml
@@ -498,14 +508,37 @@ LLM can suggest additional types dynamically!
 
 ---
 
+## Data Analysis Features
+
+### JSON Flattening
+
+Extract deeply nested JSONB data from the `structured_data` field into pandas DataFrames for analysis:
+
+**Array Handling Strategies:**
+- `flatten` - Expand arrays into separate rows (default)
+- `json` - Keep arrays as JSON strings
+- `first` - Take first element of each array
+- `count` - Count array elements
+
+**Use Cases:**
+- Export structured data to CSV for spreadsheet analysis
+- Time series analysis of recurring bills
+- Aggregate statistics across document collections
+- Data exploration and structure discovery
+
+**See Documentation:** [`docs/JSON_FLATTENING.md`](docs/JSON_FLATTENING.md)
+
+---
+
 ## Next Steps
 
 - **See [`ARCHITECTURE.md`](ARCHITECTURE.md)** - System design and architecture
-- **See [`PROGRESS.md`](PROGRESS.md)** - Current development status
+- **See [`STATUS.md`](STATUS.md)** - Current development status
 - **See [`DOCUMENT_PROCESSING_DESIGN.md`](DOCUMENT_PROCESSING_DESIGN.md)** - Worker pipeline details
+- **See [`docs/JSON_FLATTENING.md`](docs/JSON_FLATTENING.md)** - Data extraction guide
 
 ---
 
 **🚀 Ready to process documents with AI-powered OCR and classification!**
 
-**Last Updated:** 2025-11-30 (PostgreSQL Migration Complete)
+**Last Updated:** 2025-12-06 (JSON Flattening Complete)

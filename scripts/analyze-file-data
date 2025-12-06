@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Analyze file data by extracting structured_data into pandas DataFrame.
+
+This script demonstrates how to use the JSON flattening utilities to extract
+and analyze deeply nested JSONB data from ALFRD documents.
+
+Examples:
+    # Analyze a specific file
+    ./scripts/analyze-file-data --file-id abc123...
+    
+    # Analyze documents with specific tags
+    ./scripts/analyze-file-data --tags series:pge
+    
+    # Export to CSV
+    ./scripts/analyze-file-data --file-id abc123... --output data.csv
+    
+    # Show JSON structure analysis
+    ./scripts/analyze-file-data --tags series:pge --analyze-structure
+"""
+
+import asyncio
+import sys
+from pathlib import Path
+from uuid import UUID
+import argparse
+
+# Add project root to path for imports
+_script_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(_script_dir))
+
+from shared.database import AlfrdDatabase
+from shared.config import Settings
+from shared.json_flattener import (
+    flatten_documents_to_dataframe,
+    analyze_json_structure,
+    pivot_time_series
+)
+
+
+async def main():
+    parser = argparse.ArgumentParser(description='Analyze file data using pandas')
+    
+    # Data source options (mutually exclusive)
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument('--file-id', type=str, help='File UUID to analyze')
+    source_group.add_argument('--tags', nargs='+', help='Tags to filter documents')
+    source_group.add_argument('--document-ids', nargs='+', help='Specific document UUIDs')
+    
+    # Flattening options
+    parser.add_argument('--max-depth', type=int, help='Maximum nesting depth')
+    parser.add_argument('--array-strategy', 
+                       choices=['flatten', 'json', 'first', 'count'],
+                       default='flatten',
+                       help='How to handle arrays')
+    parser.add_argument('--separator', default='.', help='Separator for nested keys')
+    
+    # Output options
+    parser.add_argument('--output', '-o', help='Output CSV file path')
+    parser.add_argument('--analyze-structure', action='store_true',
+                       help='Show JSON structure analysis')
+    parser.add_argument('--pivot', action='store_true',
+                       help='Create time series pivot (requires amount column)')
+    parser.add_argument('--pivot-column', default='amount',
+                       help='Column to pivot (default: amount)')
+    parser.add_argument('--pivot-freq', default='M',
+                       choices=['D', 'W', 'M', 'Q', 'Y'],
+                       help='Pivot frequency: D=daily, W=weekly, M=monthly, Q=quarterly, Y=yearly')
+    
+    # Display options
+    parser.add_argument('--head', type=int, help='Show first N rows')
+    parser.add_argument('--describe', action='store_true', help='Show statistical summary')
+    parser.add_argument('--columns', action='store_true', help='List all columns')
+    
+    args = parser.parse_args()
+    
+    # Initialize database
+    settings = Settings()
+    db = AlfrdDatabase(settings.database_url)
+    await db.initialize()
+    
+    try:
+        # Prepare arguments for fetching
+        fetch_kwargs = {
+            'max_depth': args.max_depth,
+            'array_strategy': args.array_strategy,
+            'sep': args.separator
+        }
+        
+        if args.file_id:
+            fetch_kwargs['file_id'] = UUID(args.file_id)
+            print(f"Fetching documents from file: {args.file_id}")
+        elif args.tags:
+            fetch_kwargs['tags'] = args.tags
+            print(f"Fetching documents with tags: {', '.join(args.tags)}")
+        elif args.document_ids:
+            fetch_kwargs['document_ids'] = [UUID(did) for did in args.document_ids]
+            print(f"Fetching {len(args.document_ids)} specific documents")
+        
+        # Fetch and flatten
+        df = await flatten_documents_to_dataframe(db, **fetch_kwargs)
+        
+        if df.empty:
+            print("No documents found matching criteria")
+            return
+        
+        print(f"\n✓ Loaded {len(df)} documents")
+        print(f"✓ Columns: {len(df.columns)}")
+        
+        # Show structure analysis if requested
+        if args.analyze_structure:
+            print("\n" + "="*60)
+            print("JSON STRUCTURE ANALYSIS")
+            print("="*60)
+            
+            # Get documents for structure analysis
+            if args.file_id:
+                docs = await db.get_file_documents(UUID(args.file_id))
+            elif args.tags:
+                docs = await db.get_documents_by_tags(tags=args.tags, limit=100)
+            else:
+                docs = []
+                for doc_id in args.document_ids:
+                    doc = await db.get_document_full(UUID(doc_id))
+                    if doc:
+                        docs.append(doc)
+            
+            # Extract structured_data
+            structured_data_list = [d.get('structured_data') for d in docs if d.get('structured_data')]
+            
+            if structured_data_list:
+                structure = analyze_json_structure(structured_data_list)
+                
+                for field, info in sorted(structure.items()):
+                    print(f"\n{field}")
+                    print(f"  Types: {', '.join(info['types'])}")
+                    print(f"  Found in: {info['count']}/{len(structured_data_list)} documents")
+                    if info['samples']:
+                        print(f"  Samples: {info['samples'][:3]}")
+        
+        # Show columns if requested
+        if args.columns:
+            print("\n" + "="*60)
+            print("COLUMNS")
+            print("="*60)
+            for i, col in enumerate(df.columns, 1):
+                print(f"{i:3d}. {col}")
+        
+        # Show head if requested
+        if args.head:
+            print(f"\n" + "="*60)
+            print(f"FIRST {args.head} ROWS")
+            print("="*60)
+            print(df.head(args.head).to_string())
+        
+        # Show statistical summary if requested
+        if args.describe:
+            print("\n" + "="*60)
+            print("STATISTICAL SUMMARY")
+            print("="*60)
+            print(df.describe().to_string())
+        
+        # Create pivot table if requested
+        if args.pivot:
+            print("\n" + "="*60)
+            print(f"TIME SERIES PIVOT ({args.pivot_freq})")
+            print("="*60)
+            
+            if args.pivot_column in df.columns and 'created_at' in df.columns:
+                pivot_df = pivot_time_series(
+                    df,
+                    date_column='created_at',
+                    value_column=args.pivot_column,
+                    freq=args.pivot_freq
+                )
+                print(pivot_df.to_string())
+                
+                # Save pivot if output specified
+                if args.output:
+                    pivot_output = args.output.replace('.csv', f'_pivot_{args.pivot_freq}.csv')
+                    pivot_df.to_csv(pivot_output)
+                    print(f"\n✓ Pivot table saved to: {pivot_output}")
+            else:
+                print(f"Cannot create pivot: missing '{args.pivot_column}' or 'created_at' column")
+        
+        # Save to CSV if output specified
+        if args.output:
+            df.to_csv(args.output, index=False)
+            print(f"\n✓ Data saved to: {args.output}")
+            print(f"  Rows: {len(df)}")
+            print(f"  Columns: {len(df.columns)}")
+        
+        # If no display options specified, show basic info
+        if not any([args.head, args.describe, args.columns, args.analyze_structure, args.pivot]):
+            print("\n" + "="*60)
+            print("DATAFRAME INFO")
+            print("="*60)
+            print(f"Shape: {df.shape}")
+            print(f"\nColumns ({len(df.columns)}):")
+            for col in df.columns[:10]:
+                print(f"  - {col}")
+            if len(df.columns) > 10:
+                print(f"  ... and {len(df.columns) - 10} more")
+            
+            print(f"\nFirst few rows:")
+            print(df.head(3).to_string())
+            
+            print(f"\nTip: Use --help to see all analysis options")
+    
+    finally:
+        await db.close()
+
+
+if __name__ == '__main__':
+    asyncio.run(main())

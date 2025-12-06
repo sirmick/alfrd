@@ -17,11 +17,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import uvicorn
 
 from shared.config import Settings
 from shared.database import AlfrdDatabase
+from shared.json_flattener import flatten_to_dataframe
 
 # Configure logging
 logging.basicConfig(
@@ -694,6 +695,89 @@ async def regenerate_file(file_id: str, database: AlfrdDatabase = Depends(get_db
         logger.error(f"Error regenerating file: {str(e)}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error regenerating file: {str(e)}")
+
+
+@app.get("/api/v1/files/{file_id}/flatten")
+async def flatten_file_data(
+    file_id: str,
+    array_strategy: str = Query('flatten', description="How to handle arrays (flatten, json, first, count)"),
+    max_depth: Optional[int] = Query(None, description="Maximum nesting depth"),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    Flatten all documents in a file to tabular format.
+    
+    Returns the structured_data from all documents as a flat table structure
+    suitable for display in a UI table component.
+    
+    Path Parameters:
+        - file_id: UUID of the file
+    
+    Query Parameters:
+        - array_strategy: How to handle arrays (flatten, json, first, count)
+        - max_depth: Maximum nesting depth to flatten
+    
+    Returns:
+        Flattened data with columns and rows
+    """
+    logger.info(f"GET /api/v1/files/{file_id}/flatten - array_strategy={array_strategy}")
+    try:
+        # Parse UUID
+        try:
+            file_uuid = UUID(file_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid file ID format: {file_id}")
+        
+        # Check file exists
+        file_record = await database.get_file(file_uuid)
+        if not file_record:
+            raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+        
+        # Get documents in file
+        documents = await database.get_file_documents(file_uuid)
+        
+        if not documents:
+            return {
+                "columns": [],
+                "rows": [],
+                "count": 0,
+                "message": "No documents found in file"
+            }
+        
+        # Flatten documents to DataFrame
+        df = flatten_to_dataframe(
+            documents,
+            array_strategy=array_strategy,
+            max_depth=max_depth,
+            include_metadata=True,
+            metadata_columns=['id', 'created_at', 'document_type']
+        )
+        
+        # Convert DataFrame to table format
+        columns = df.columns.tolist()
+        rows = df.to_dict(orient='records')
+        
+        # Convert datetime objects to ISO strings for JSON serialization
+        for row in rows:
+            for key, value in row.items():
+                if hasattr(value, 'isoformat'):
+                    row[key] = value.isoformat()
+                elif value is None or (isinstance(value, float) and str(value) == 'nan'):
+                    row[key] = None
+        
+        return {
+            "columns": columns,
+            "rows": rows,
+            "count": len(rows),
+            "array_strategy": array_strategy
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error flattening file data: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error flattening file data: {str(e)}")
 
 # ==========================================
 # TAG ENDPOINTS

@@ -29,6 +29,7 @@ import {
   chevronForward
 } from 'ionicons/icons'
 import { useHistory, useParams } from 'react-router-dom'
+import DataTable from '../components/DataTable'
 
 function FileDetailPage() {
   const history = useHistory()
@@ -36,7 +37,9 @@ function FileDetailPage() {
   
   const [file, setFile] = useState(null)
   const [documents, setDocuments] = useState([])
+  const [flattenedData, setFlattenedData] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [loadingFlattened, setLoadingFlattened] = useState(false)
   const [error, setError] = useState(null)
   const [showActionSheet, setShowActionSheet] = useState(false)
   const [regenerating, setRegenerating] = useState(false)
@@ -63,6 +66,25 @@ function FileDetailPage() {
     }
   }
 
+  const fetchFlattenedData = async () => {
+    try {
+      setLoadingFlattened(true)
+      
+      const response = await fetch(`/api/v1/files/${fileId}/flatten?array_strategy=flatten`)
+      if (!response.ok) {
+        throw new Error(`Failed to fetch flattened data: ${response.statusText}`)
+      }
+      
+      const data = await response.json()
+      setFlattenedData(data)
+    } catch (err) {
+      console.error('Error fetching flattened data:', err)
+      setToast({ show: true, message: `Error loading table: ${err.message}` })
+    } finally {
+      setLoadingFlattened(false)
+    }
+  }
+
   useEffect(() => {
     // Skip if fileId is not valid (e.g., "create" route)
     if (!fileId || fileId === 'create') {
@@ -72,6 +94,7 @@ function FileDetailPage() {
     }
     
     fetchFileDetails()
+    fetchFlattenedData()
     
     // Poll for status changes every 3 seconds
     const interval = setInterval(fetchFileDetails, 3000)
@@ -284,6 +307,24 @@ function FileDetailPage() {
 
             {/* Summary Section */}
             {renderSummary()}
+
+            {/* Flattened Data Table */}
+            {flattenedData && flattenedData.count > 0 && (
+              <DataTable data={flattenedData} />
+            )}
+
+            {loadingFlattened && (
+              <IonCard>
+                <IonCardContent>
+                  <div style={{ textAlign: 'center', padding: '20px' }}>
+                    <IonSpinner name="crescent" />
+                    <p style={{ marginTop: '10px', color: '#666' }}>
+                      Loading data table...
+                    </p>
+                  </div>
+                </IonCardContent>
+              </IonCard>
+            )}
 
             {/* Documents List */}
             {documents.length > 0 && (

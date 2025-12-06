@@ -188,7 +188,9 @@ User uploads folder → pending
 ```
 esec/
 ├── api-server/              # FastAPI REST API
-│   └── src/api_server/db/schema.sql
+│   └── src/api_server/
+│       ├── main.py          # 30+ endpoints including /flatten
+│       └── db/schema.sql
 ├── document-processor/      # 7-worker pipeline
 │   └── src/document_processor/
 │       ├── main.py          # Orchestrator
@@ -205,10 +207,21 @@ esec/
 │       ├── llm/bedrock.py
 │       └── tools/           # classify, summarize, score
 ├── web-ui/                  # Ionic React PWA
+│   └── src/
+│       ├── components/DataTable.jsx  # Flattened data display
+│       └── pages/FileDetailPage.jsx  # Shows flattened table
 ├── shared/                  # Shared utilities
 │   ├── database.py          # PostgreSQL client (674 lines)
+│   ├── json_flattener.py    # JSONB to DataFrame conversion (428 lines)
 │   ├── config.py
-│   └── tests/test_database.py
+│   └── tests/
+│       ├── test_database.py
+│       └── test_json_flattener.py  # 458 lines, 25+ tests
+├── scripts/
+│   ├── analyze-file-data    # CLI for data extraction & CSV export
+│   └── ...
+├── docs/
+│   └── JSON_FLATTENING.md   # Complete flattening documentation
 ├── docker/                  # Deployment
 │   ├── Dockerfile
 │   ├── docker-compose.yml
@@ -337,9 +350,9 @@ Full OpenAPI docs: `http://localhost:8000/docs`
 
 ---
 
-## Current Status (2025-11-30)
+## Current Status (2025-12-06)
 
-### ✅ Completed (Phase 1C + 2A)
+### ✅ Completed (Phase 1C + 2A + 2B)
 - PostgreSQL database with asyncpg
 - 7-worker self-improving pipeline (OCR → Classify → Score → Summarize → Score → File → Generate)
 - AWS Textract OCR with block preservation
@@ -347,19 +360,24 @@ Full OpenAPI docs: `http://localhost:8000/docs`
 - Series-based filing with hybrid tag approach
 - File generation with collection summaries
 - API server with 30+ endpoints
-- Ionic React PWA (basic structure)
+- Ionic React PWA with data visualization
 - Docker deployment
 - Full database schema with series, files, and tags
+- **JSON flattening system** - Extract nested JSONB to pandas DataFrames
+- **CLI tool** - `analyze-file-data` for data analysis and CSV export
+- **API endpoint** - `/api/v1/files/{file_id}/flatten`
+- **UI integration** - DataTable component in file detail view
+- **Multiple array strategies** - flatten, json, first, count
+- **Comprehensive tests** - 25+ test cases for all scenarios
 
-### ⏳ In Progress (Phase 2B)
-- PWA camera to API integration
+### ⏳ In Progress (Phase 2C)
 - Real-time status updates in UI
 - End-to-end mobile workflow testing
 
 ### ❌ Planned (Phase 3)
 - Hierarchical summaries (weekly → monthly → yearly)
-- Financial tracking with CSV exports
-- Analytics dashboard
+- Financial tracking with advanced analytics
+- Analytics dashboard with charts
 - Advanced search and filtering
 
 ---
