@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS documents (
     status VARCHAR NOT NULL CHECK (status IN (
         'pending',                  -- Document folder detected
         'ocr_started',             -- AWS Textract called
+        'ocr_in_progress',         -- OCR extraction in progress
         'ocr_completed',           -- Text extracted
         'classifying',             -- MCP classification in progress
         'classified',              -- Type determined

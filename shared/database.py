@@ -1024,6 +1024,77 @@ class AlfrdDatabase:
             
             return files
     
+    async def get_files_needing_scoring(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get files that need scoring (generated files not recently scored).
+        
+        This is used by the file summary scorer worker to find files
+        that have summaries but haven't been evaluated yet.
+        
+        Args:
+            limit: Maximum number of files to return
+            
+        Returns:
+            List of file dicts with tags
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            # Get files with status='generated' that haven't been scored recently
+            # For now, just get all 'generated' files
+            rows = await conn.fetch("""
+                SELECT id, summary_text, summary_metadata, prompt_version,
+                       status, document_count, last_generated_at, updated_at
+                FROM files
+                WHERE status = 'generated'
+                  AND summary_text IS NOT NULL
+                ORDER BY last_generated_at ASC NULLS FIRST
+                LIMIT $1
+            """, limit)
+            
+            # Add tags for each file
+            files = []
+            for row in rows:
+                file_dict = dict(row)
+                file_dict['tags'] = await self.get_file_tags(file_dict['id'])
+                files.append(file_dict)
+            
+            return files
+    
+    async def update_file_scoring(self, file_id: UUID, score: float, metrics: dict):
+        """Update file with scoring information.
+        
+        Args:
+            file_id: File UUID
+            score: Scoring result (0-1)
+            metrics: Detailed scoring metrics
+        """
+        await self.initialize()
+        
+        import json
+        
+        async with self.pool.acquire() as conn:
+            # Store scoring info in summary_metadata
+            current_metadata = await conn.fetchval("""
+                SELECT summary_metadata FROM files WHERE id = $1
+            """, file_id)
+            
+            if current_metadata:
+                if isinstance(current_metadata, str):
+                    current_metadata = json.loads(current_metadata)
+            else:
+                current_metadata = {}
+            
+            # Add scoring info
+            current_metadata['last_score'] = score
+            current_metadata['last_score_metrics'] = metrics
+            current_metadata['last_scored_at'] = utc_now().isoformat()
+            
+            await conn.execute("""
+                UPDATE files
+                SET summary_metadata = $2, updated_at = $3
+                WHERE id = $1
+            """, file_id, json.dumps(current_metadata), utc_now())
+    
     async def get_file_documents(
         self,
         file_id: UUID,

@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
     name="OCR Document",
     retries=2,
     retry_delay_seconds=30,
-    tags=["ocr", "aws"]
+    tags=["ocr", "aws"],
+    cache_policy=None  # Disable caching - db can't be serialized
 )
 async def ocr_task(doc_id: UUID, db: AlfrdDatabase) -> str:
     """
@@ -174,7 +175,8 @@ async def ocr_task(doc_id: UUID, db: AlfrdDatabase) -> str:
 @task(
     name="Classify Document",
     retries=2,
-    tags=["classify", "llm"]
+    tags=["classify", "llm"],
+    cache_policy=None  # Disable caching
 )
 async def classify_task(
     doc_id: UUID,
@@ -235,12 +237,13 @@ async def classify_task(
             await db.add_tag_to_document(doc_id, tag, created_by='llm')
         
         # Add user tags from folder metadata
-        folder_metadata = doc.get('folder_metadata', {})
-        if isinstance(folder_metadata, str):
-            folder_metadata = json.loads(folder_metadata)
-        user_tags = folder_metadata.get('metadata', {}).get('tags', [])
-        for tag in user_tags:
-            await db.add_tag_to_document(doc_id, tag, created_by='user')
+        folder_metadata = doc.get('folder_metadata')
+        if folder_metadata:
+            if isinstance(folder_metadata, str):
+                folder_metadata = json.loads(folder_metadata)
+            user_tags = folder_metadata.get('metadata', {}).get('tags', [])
+            for tag in user_tags:
+                await db.add_tag_to_document(doc_id, tag, created_by='user')
         
         # Record new type suggestion if present
         if classification.get('suggested_type'):
@@ -268,7 +271,8 @@ async def classify_task(
 @task(
     name="Summarize Document",
     retries=2,
-    tags=["summarize", "llm"]
+    tags=["summarize", "llm"],
+    cache_policy=None  # Disable caching
 )
 async def summarize_task(
     doc_id: UUID,
@@ -353,7 +357,11 @@ async def summarize_task(
         raise
 
 
-@task(name="Score Classification", tags=["scoring", "llm"])
+@task(
+    name="Score Classification",
+    tags=["scoring", "llm"],
+    cache_policy=None  # Disable caching
+)
 async def score_classification_task(
     doc_id: UUID,
     classification: Dict[str, Any],
@@ -391,34 +399,60 @@ async def score_classification_task(
         doc = await db.get_document(doc_id)
         prompt = await db.get_active_prompt(PromptType.CLASSIFIER)
         
+        # Build document_info dict for scoring
+        document_info = {
+            'extracted_text': doc['extracted_text'],
+            'filename': doc['filename'],
+            'document_type': classification['document_type'],
+            'confidence': classification['confidence'],
+            'reasoning': classification.get('reasoning', ''),
+            'tags': classification.get('tags', [])
+        }
+        
         loop = asyncio.get_event_loop()
         score_result = await loop.run_in_executor(
             None,
             score_classification,
-            doc['extracted_text'],
-            classification,
+            document_info,
             prompt['prompt_text'],
             bedrock_client
         )
         
         # Update prompt if significantly improved
-        if score_result['score'] > (prompt.get('performance_score', 0) + settings.prompt_update_threshold):
+        current_score = prompt.get('performance_score') or 0
+        if score_result['score'] > (current_score + settings.prompt_update_threshold):
+            # Evolve the prompt using the scoring feedback
+            from mcp_server.tools.score_performance import evolve_prompt
+            
+            loop = asyncio.get_event_loop()
+            new_prompt_text = await loop.run_in_executor(
+                None,
+                evolve_prompt,
+                prompt['prompt_text'],
+                'classifier',
+                None,  # document_type (None for classifier)
+                score_result.get('feedback', ''),
+                score_result.get('suggested_improvements', ''),
+                300,  # max_words
+                bedrock_client
+            )
+            
             await db.deactivate_old_prompts(PromptType.CLASSIFIER)
             await db.create_prompt(
                 prompt_id=uuid4(),
                 prompt_type=PromptType.CLASSIFIER,
-                prompt_text=score_result['suggested_prompt'],
+                prompt_text=new_prompt_text,
                 version=prompt['version'] + 1,
                 performance_score=score_result['score']
             )
             logger.info(
                 f"Updated classifier prompt: "
-                f"v{prompt['version']+1}, score={score_result['score']}"
+                f"v{prompt['version']+1}, score={score_result['score']:.2f}"
             )
         
         await db.update_document(
             doc_id,
-            status=DocumentStatus.SCORED_CLASSIFICATION
+            status=DocumentStatus.SUMMARIZING
         )
         return score_result['score']
         
@@ -428,7 +462,11 @@ async def score_classification_task(
         raise
 
 
-@task(name="Score Summary", tags=["scoring", "llm"])
+@task(
+    name="Score Summary",
+    tags=["scoring", "llm"],
+    cache_policy=None  # Disable caching
+)
 async def score_summary_task(
     doc_id: UUID,
     db: AlfrdDatabase,
@@ -437,7 +475,7 @@ async def score_summary_task(
     """Score summary quality and update prompt if improved."""
     await rate_limit("aws-bedrock")
     
-    from mcp_server.tools.score_performance import score_summary
+    from mcp_server.tools.score_performance import score_summarization
     from uuid import uuid4
     from shared.config import Settings
     
@@ -451,7 +489,7 @@ async def score_summary_task(
         
         prompt = await db.get_active_prompt(PromptType.SUMMARIZER, document_type)
         if not prompt:
-            await db.update_document(doc_id, status=DocumentStatus.SCORED_SUMMARY)
+            await db.update_document(doc_id, status=DocumentStatus.FILED)
             return 0.0
         
         # Parse structured data
@@ -459,36 +497,58 @@ async def score_summary_task(
         if isinstance(structured_data, str):
             structured_data = json.loads(structured_data)
         
+        # Build document_info dict for scoring
+        document_info = {
+            'extracted_text': doc['extracted_text'],
+            'filename': doc['filename'],
+            'document_type': document_type,
+            'structured_data': structured_data
+        }
+        
         # Score
         loop = asyncio.get_event_loop()
         score_result = await loop.run_in_executor(
             None,
-            score_summary,
-            doc['extracted_text'],
-            doc['summary'],
-            structured_data,
+            score_summarization,
+            document_info,
             prompt['prompt_text'],
-            document_type,
             bedrock_client
         )
         
         # Update prompt if improved
-        if score_result['score'] > (prompt.get('performance_score', 0) + settings.prompt_update_threshold):
+        current_score = prompt.get('performance_score') or 0
+        if score_result['score'] > (current_score + settings.prompt_update_threshold):
+            # Evolve the prompt using the scoring feedback
+            from mcp_server.tools.score_performance import evolve_prompt
+            
+            loop = asyncio.get_event_loop()
+            new_prompt_text = await loop.run_in_executor(
+                None,
+                evolve_prompt,
+                prompt['prompt_text'],
+                'summarizer',
+                document_type,
+                score_result.get('feedback', ''),
+                score_result.get('suggested_improvements', ''),
+                None,  # max_words (None for summarizer)
+                bedrock_client
+            )
+            
             await db.deactivate_old_prompts(PromptType.SUMMARIZER, document_type)
             await db.create_prompt(
                 prompt_id=uuid4(),
                 prompt_type=PromptType.SUMMARIZER,
                 document_type=document_type,
-                prompt_text=score_result['suggested_prompt'],
+                prompt_text=new_prompt_text,
                 version=prompt['version'] + 1,
                 performance_score=score_result['score']
             )
             logger.info(
                 f"Updated {document_type} summarizer prompt: "
-                f"v{prompt['version']+1}, score={score_result['score']}"
+                f"v{prompt['version']+1}, score={score_result['score']:.2f}"
             )
         
-        await db.update_document(doc_id, status=DocumentStatus.SCORED_SUMMARY)
+        await db.update_document(doc_id, status=DocumentStatus.FILED)
         return score_result['score']
         
     except Exception as e:
@@ -497,7 +557,11 @@ async def score_summary_task(
         raise
 
 
-@task(name="File Document (Series)", tags=["filing", "llm"])
+@task(
+    name="File Document (Series)",
+    tags=["filing", "llm"],
+    cache_policy=None  # Disable caching
+)
 async def file_task(
     doc_id: UUID,
     db: AlfrdDatabase,
@@ -560,14 +624,18 @@ async def file_task(
         raise
 
 
-@task(name="Generate File Summary", tags=["file-generation", "llm"])
+@task(
+    name="Generate File Summary",
+    tags=["file-generation", "llm"],
+    cache_policy=None  # Disable caching
+)
 async def generate_file_summary_task(
     file_id: UUID,
     db: AlfrdDatabase,
     bedrock_client: BedrockClient
 ) -> str:
     """Generate summary for file collection."""
-    from mcp_server.tools.summarize_file import summarize_file_with_retry
+    from mcp_server.tools.summarize_file import summarize_file
     from datetime import datetime, timezone
     
     await rate_limit("file-generation")
@@ -580,7 +648,13 @@ async def generate_file_summary_task(
         documents = await db.get_file_documents(file_id, order_by="created_at DESC")
         
         if not documents:
-            logger.warning(f"No documents for file {file_id}")
+            logger.warning(f"No documents for file {file_id}, marking as generated with empty summary")
+            await db.update_file(
+                file_id,
+                summary_text="",
+                status='generated',
+                last_generated_at=datetime.now(timezone.utc)
+            )
             return ""
         
         # Build aggregated content
@@ -598,24 +672,35 @@ async def generate_file_summary_task(
             })
         
         # Generate file summary
-        summary = summarize_file_with_retry(
-            file_tags=file['tags'],
-            documents=content_parts,
-            bedrock_client=bedrock_client
+        loop = asyncio.get_event_loop()
+        summary = await loop.run_in_executor(
+            None,
+            summarize_file,
+            content_parts,  # documents
+            None,  # file_type (deprecated)
+            file['tags'],  # tags
+            "",  # prompt (empty string for default)
+            bedrock_client,
+            None  # flattened_table (will be auto-generated)
         )
         
         # Save
         await db.update_file(
             file_id,
-            summary_text=summary['summary_text'],
+            summary_text=summary['summary'],
             summary_metadata=summary.get('metadata', {}),
             status='generated',
             last_generated_at=datetime.now(timezone.utc)
         )
         
         logger.info(f"Generated summary for file {file_id}")
-        return summary['summary_text']
+        return summary['summary']
         
     except Exception as e:
         logger.error(f"File summary generation failed for {file_id}: {e}", exc_info=True)
+        # Mark file as failed so it doesn't keep retrying
+        await db.update_file(
+            file_id,
+            status='failed'
+        )
         raise

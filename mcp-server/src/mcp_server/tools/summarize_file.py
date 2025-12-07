@@ -1,11 +1,61 @@
 """MCP Tool: Summarize File
 
 Generate summary for a collection of related documents (file).
+
+Includes self-improvement scoring mechanism and JSON flattening table generation.
 """
 
 import json
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 from datetime import datetime
+
+
+def _flatten_documents_to_table(documents: List[Dict[str, Any]]) -> Optional[str]:
+    """Flatten document structured_data to a table format.
+    
+    Args:
+        documents: List of document dicts with structured_data
+        
+    Returns:
+        Markdown table string or None if no structured data
+    """
+    try:
+        # Import here to avoid circular dependencies
+        import sys
+        from pathlib import Path
+        _script_dir = Path(__file__).parent.parent.parent.parent
+        sys.path.insert(0, str(_script_dir))
+        
+        from shared.json_flattener import flatten_to_dataframe
+        
+        # Only include documents with structured_data
+        docs_with_data = [
+            doc for doc in documents 
+            if doc.get('structured_data')
+        ]
+        
+        if not docs_with_data:
+            return None
+        
+        # Flatten to DataFrame
+        df = flatten_to_dataframe(
+            docs_with_data,
+            structured_data_key='structured_data',
+            include_metadata=True,
+            metadata_columns=['created_at', 'filename'],
+            array_strategy='json',  # Keep arrays as JSON for readability
+            max_depth=3  # Limit depth for readability
+        )
+        
+        if df.empty:
+            return None
+        
+        # Convert to markdown table
+        return df.to_markdown(index=False)
+        
+    except Exception as e:
+        # If flattening fails, return None (will fall back to JSON)
+        return None
 
 
 def summarize_file(
@@ -13,7 +63,8 @@ def summarize_file(
     file_type: str = None,
     tags: List[str] = None,
     prompt: str = "",
-    bedrock_client = None
+    bedrock_client = None,
+    flattened_table: Optional[str] = None
 ) -> Dict[str, Any]:
     """Generate summary for a file (collection of documents).
     
@@ -23,6 +74,7 @@ def summarize_file(
         tags: Tags defining this file
         prompt: Summarization prompt from DB
         bedrock_client: AWS Bedrock client instance
+        flattened_table: Optional pre-generated flattened data table (markdown format)
     
     Returns:
         {
@@ -32,10 +84,21 @@ def summarize_file(
             'model': str             # Model used
         }
     """
+    # Generate flattened table if not provided
+    if flattened_table is None:
+        flattened_table = _flatten_documents_to_table(documents)
+    
     # Build context for LLM
     tags = tags or []
     context = f"Tags: {', '.join(tags)}\n"
     context += f"Total Documents: {len(documents)}\n\n"
+    
+    # Include flattened table if available
+    if flattened_table:
+        context += "=== STRUCTURED DATA TABLE (Flattened) ===\n\n"
+        context += flattened_table
+        context += "\n\n=== END TABLE ===\n\n"
+    
     context += "Documents (chronological order):\n\n"
     
     for i, doc in enumerate(documents, 1):
@@ -48,7 +111,8 @@ def summarize_file(
         # Include summary or structured data
         if doc.get('summary'):
             context += f"Summary: {doc['summary']}\n"
-        elif doc.get('structured_data'):
+        elif doc.get('structured_data') and not flattened_table:
+            # Only include raw JSON if we don't have flattened table
             structured = doc['structured_data']
             if isinstance(structured, str):
                 context += f"Data: {structured}\n"
@@ -57,7 +121,11 @@ def summarize_file(
         
         context += "\n"
     
-    # Build complete user message
+    # Build user message with table-aware instructions
+    table_instruction = ""
+    if flattened_table:
+        table_instruction = "\nNOTE: Use the structured data table above to identify trends, patterns, and calculate statistics accurately."
+    
     user_message = f"""{prompt}
 
 --- DOCUMENTS TO SUMMARIZE ---
@@ -67,17 +135,19 @@ def summarize_file(
 --- INSTRUCTIONS ---
 
 Please provide:
-1. A comprehensive summary
-2. Key insights and patterns
-3. Important statistics or totals
+1. A comprehensive summary{table_instruction}
+2. Key insights and patterns across the series
+3. Important statistics or totals (calculate from the table if provided)
 4. Any recommendations or action items
+5. Trend analysis (increasing/decreasing patterns, anomalies)
 
 Format your response as JSON:
 {{
   "summary": "<summary text>",
   "insights": ["<insight 1>", "<insight 2>", ...],
   "statistics": {{"<key>": "<value>", ...}},
-  "recommendations": ["<recommendation 1>", ...]
+  "recommendations": ["<recommendation 1>", ...],
+  "trends": {{"<metric>": "<trend description>", ...}}
 }}"""
     
     # Call Bedrock using the correct method
@@ -104,7 +174,8 @@ Format your response as JSON:
                     'metadata': {
                         'insights': parsed.get('insights', []),
                         'statistics': parsed.get('statistics', {}),
-                        'recommendations': parsed.get('recommendations', [])
+                        'recommendations': parsed.get('recommendations', []),
+                        'trends': parsed.get('trends', {})
                     },
                     'confidence': 0.85,  # Default confidence
                     'model': 'us.amazon.nova-lite-v1:0'
@@ -189,21 +260,10 @@ Provide your evaluation as JSON:
   "prompt_improvements": "<suggested changes to prompt>"
 }"""
     
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"text": scoring_prompt},
-                {"text": "\n\n--- CONTEXT ---\n"},
-                {"text": context}
-            ]
-        }
-    ]
-    
     try:
         response_text = bedrock_client.invoke_with_system_and_user(
             system="You are an expert at evaluating document summaries for quality and accuracy.",
-            user_message=context,
+            user_message=f"{scoring_prompt}\n\n--- CONTEXT ---\n\n{context}",
             temperature=0.1,
             max_tokens=1500
         )

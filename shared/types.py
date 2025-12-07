@@ -11,6 +11,7 @@ class DocumentStatus(str, Enum):
     """Document processing status - tracks pipeline progress."""
     PENDING = "pending"                         # Document folder detected
     OCR_STARTED = "ocr_started"                 # AWS Textract called
+    OCR_IN_PROGRESS = "ocr_in_progress"         # OCR extraction in progress
     OCR_COMPLETED = "ocr_completed"             # Text extracted
     CLASSIFYING = "classifying"                 # MCP classification in progress
     CLASSIFIED = "classified"                   # Type determined

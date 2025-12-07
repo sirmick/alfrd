@@ -1,90 +1,70 @@
-"""Main document processing loop using self-improving worker pool architecture."""
+"""Prefect-based document processor entry point."""
 
-import argparse
 import asyncio
+import argparse
 from pathlib import Path
-from datetime import datetime, timezone
 import sys
-import logging
+import os
+from uuid import UUID
 
-# Standalone PYTHONPATH setup - add both project root and src directory
+# Path setup
 _script_dir = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(_script_dir))  # Project root for shared
-sys.path.insert(0, str(Path(__file__).parent.parent))  # src for document_processor
+sys.path.insert(0, str(_script_dir / "mcp-server" / "src"))  # MCP server source
+sys.path.insert(0, str(Path(__file__).parent.parent))  # document-processor/src
 
 from shared.config import Settings
 from shared.database import AlfrdDatabase
-from document_processor.workers import WorkerPool
-from document_processor.ocr_worker import OCRWorker
-from document_processor.classifier_worker import ClassifierWorker
-from document_processor.scorer_workers import ClassifierScorerWorker, SummarizerScorerWorker
-from document_processor.summarizer_worker import SummarizerWorker
-from document_processor.filing_worker import FilingWorker
-from document_processor.file_generator_worker import FileGeneratorWorker
-
-# Set up logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from shared.types import DocumentStatus
+from mcp_server.llm.bedrock import BedrockClient
+from document_processor.flows.orchestrator import main_orchestrator_flow
+from document_processor.flows import process_document_flow
 
 
-async def scan_inbox_and_create_pending_documents(settings: Settings, db: AlfrdDatabase):
+async def scan_inbox_and_create_pending(settings: Settings):
     """
     Scan inbox for new folders and create pending database entries.
     
-    This allows workers to pick them up and process them.
-    Skips folders that are already registered in the database.
+    (Existing logic from old main.py - unchanged)
     """
     from document_processor.detector import FileDetector
     from shared.constants import META_JSON_FILENAME
-    from shared.types import DocumentStatus
-    from uuid import UUID
+    from datetime import datetime, timezone
     import json
     import shutil
     
     detector = FileDetector()
-    
     inbox = settings.inbox_path
     
     if not inbox.exists():
-        logger.warning(f"Inbox does not exist: {inbox}")
         inbox.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Created inbox directory: {inbox}")
         return
     
-    # Get all folders in inbox
     folders = [f for f in inbox.iterdir() if f.is_dir()]
-    
     if not folders:
-        logger.debug("No document folders found in inbox")
         return
     
-    # Get list of already registered document IDs
-    all_docs = await db.list_documents(limit=10000)
-    existing_ids = set(doc['id'] for doc in all_docs)
+    # Get existing document IDs
+    db = AlfrdDatabase(settings.database_url)
+    await db.initialize()
     
-    logger.info(f"Found {len(folders)} document folders in inbox, {len(existing_ids)} already registered")
-    
-    new_count = 0
-    for folder_path in folders:
-        try:
-            # Validate folder
+    try:
+        all_docs = await db.list_documents(limit=10000)
+        existing_ids = set(doc['id'] for doc in all_docs)
+        
+        new_count = 0
+        for folder_path in folders:
             is_valid, error, meta = detector.validate_document_folder(folder_path)
             
             if not is_valid:
-                logger.error(f"Invalid folder {folder_path.name}: {error}")
                 continue
             
             doc_id = UUID(meta.get('id'))
             
-            # Skip if already registered
             if doc_id in existing_ids:
-                logger.debug(f"Document {doc_id} already registered, skipping")
                 continue
             
-            # Create storage paths (file organization only, no DB in this section)
+            # Create storage paths
             now = datetime.now(timezone.utc)
             year_month = now.strftime("%Y/%m")
             base_path = settings.documents_path / year_month
@@ -92,18 +72,17 @@ async def scan_inbox_and_create_pending_documents(settings: Settings, db: AlfrdD
             text_path = base_path / "text"
             meta_path = base_path / "meta"
             
-            # Create directories
             for path in [raw_path, text_path, meta_path]:
                 path.mkdir(parents=True, exist_ok=True)
             
-            # Copy entire folder to raw storage
+            # Copy folder
             shutil.copytree(folder_path, raw_path, dirs_exist_ok=True)
             
-            # Save empty text file (will be filled by OCR worker)
+            # Create empty text file
             text_file = text_path / f"{doc_id}.txt"
             text_file.write_text("")
             
-            # Save detailed metadata
+            # Save metadata
             detailed_meta = {
                 'original_meta': meta,
                 'processed_at': now.isoformat()
@@ -111,10 +90,14 @@ async def scan_inbox_and_create_pending_documents(settings: Settings, db: AlfrdD
             meta_file = meta_path / f"{doc_id}.json"
             meta_file.write_text(json.dumps(detailed_meta, indent=2))
             
-            # Calculate total file size
-            total_size = sum(f.stat().st_size for f in folder_path.rglob('*') if f.is_file())
+            # Calculate size
+            total_size = sum(
+                f.stat().st_size
+                for f in folder_path.rglob('*')
+                if f.is_file()
+            )
             
-            # Create document record in database using AlfrdDatabase class
+            # Create document record
             await db.create_document(
                 doc_id=doc_id,
                 filename=folder_path.name,
@@ -128,155 +111,83 @@ async def scan_inbox_and_create_pending_documents(settings: Settings, db: AlfrdD
                 folder_path=str(folder_path)
             )
             
-            logger.info(f"Registered new document {doc_id} in PENDING status for worker processing")
             new_count += 1
-            
-        except Exception as e:
-            logger.error(f"Error registering folder {folder_path.name}: {e}", exc_info=True)
+        
+        if new_count > 0:
+            print(f"✅ Registered {new_count} new document(s)")
     
-    if new_count > 0:
-        logger.info(f"Registered {new_count} new document(s) for processing")
-    else:
-        logger.info("No new documents to register")
+    finally:
+        await db.close()
 
 
-async def main(run_once: bool = False):
-    """Main entry point for self-improving document processing pipeline.
+async def main(run_once: bool = False, doc_id: str = None):
+    """Main entry point."""
+    # Configure Prefect server to listen on 0.0.0.0 for Docker
+    os.environ.setdefault("PREFECT_SERVER_API_HOST", "0.0.0.0")
+    os.environ.setdefault("PREFECT_API_URL", "http://0.0.0.0:4200/api")
     
-    Args:
-        run_once: If True, exit after processing all documents (no continuous polling)
-    """
-    print("\n" + "=" * 80)
-    print("🚀 Document Processor - Self-Improving Worker Pool Mode")
-    if run_once:
-        print("   Mode: Run once and exit")
-    print("=" * 80)
-    
-    logger.info(f"Starting document processor with self-improving worker pool (run_once={run_once})")
+    # Disable concurrency limit warnings - limits are advisory only in local mode
+    os.environ["PREFECT_LOGGING_LEVEL"] = "INFO"
     
     settings = Settings()
     
-    print(f"📂 Inbox: {settings.inbox_path}")
-    print(f"💾 Database: {settings.database_url}")
-    print(f"📁 Documents: {settings.documents_path}")
-    print()
-    print(f"⚙️  Worker Configuration:")
-    print(f"   OCR Workers: {settings.ocr_workers} (poll every {settings.ocr_poll_interval}s)")
-    print(f"   Classifier Workers: {settings.classifier_workers} (poll every {settings.classifier_poll_interval}s)")
-    print(f"   Classifier Scorer Workers: {settings.classifier_scorer_workers} (poll every {settings.classifier_scorer_poll_interval}s)")
-    print(f"   Summarizer Workers: {settings.summarizer_workers} (poll every {settings.summarizer_poll_interval}s)")
-    print(f"   Filing Workers: {settings.filing_workers} (poll every {settings.filing_poll_interval}s)")
-    print(f"   Summarizer Scorer Workers: {settings.summarizer_scorer_workers} (poll every {settings.summarizer_scorer_poll_interval}s)")
-    print(f"   File Generator Workers: {getattr(settings, 'file_generator_workers', 2)} (poll every {getattr(settings, 'file_generator_poll_interval', 15)}s)")
-    print()
-    print(f"🧠 Prompt Evolution:")
-    print(f"   Classifier Max Words: {settings.classifier_prompt_max_words}")
-    print(f"   Min Docs for Scoring: {settings.min_documents_for_scoring}")
-    print(f"   Update Threshold: {settings.prompt_update_threshold}")
+    print("\n" + "=" * 80)
+    print("🚀 ALFRD Document Processor - Prefect Mode")
+    if run_once:
+        print("   Mode: Run once and exit")
+    if doc_id:
+        print(f"   Processing single document: {doc_id}")
+    print("=" * 80)
     print()
     
-    logger.info(f"Inbox: {settings.inbox_path}")
-    logger.info(f"Database: {settings.database_url}")
-    logger.info(f"Documents: {settings.documents_path}")
-    
-    # Initialize shared database connection pool
-    print("🔌 Connecting to PostgreSQL database...")
-    db = AlfrdDatabase(
-        database_url=settings.database_url,
-        pool_min_size=settings.db_pool_min_size,
-        pool_max_size=settings.db_pool_max_size,
-        pool_timeout=settings.db_pool_timeout
-    )
-    await db.initialize()
-    logger.info("Database connection pool initialized")
+    print("📊 Concurrency Limits: aws-textract=3, aws-bedrock=5, file-generation=2")
+    print("   (Advisory only - enforced in production Prefect Server)")
     print()
     
-    try:
-        # Step 1: Scan inbox and create pending document entries
-        print("📂 Scanning inbox for new documents...")
-        await scan_inbox_and_create_pending_documents(settings, db)
-        print()
+    # Process single document
+    if doc_id:
+        print(f"Processing document {doc_id}...")
         
-        # Step 2: Create worker pool with new self-improving pipeline
-        print("🔧 Starting self-improving worker pool...")
-        pool = WorkerPool()
+        db = AlfrdDatabase(settings.database_url)
+        await db.initialize()
         
-        # Add workers in pipeline order (all share the same database connection pool):
-        # 1. OCR - Extract text from documents
-        pool.add_worker(OCRWorker(settings, db))
+        bedrock_client = BedrockClient(
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key,
+            aws_region=settings.aws_region
+        )
         
-        # 2. Classifier - Classify documents using DB prompts (can suggest new types)
-        pool.add_worker(ClassifierWorker(settings, db))
-        
-        # 3. Classifier Scorer - Score classification and evolve prompt
-        pool.add_worker(ClassifierScorerWorker(settings, db))
-        
-        # 4. Summarizer - Generic summarization using type-specific DB prompts
-        pool.add_worker(SummarizerWorker(settings, db))
-        
-        # 5. Filing - Create LLM files based on document tags
-        pool.add_worker(FilingWorker(settings, db))
-        
-        # 6. Summarizer Scorer - Score summary and evolve prompt
-        pool.add_worker(SummarizerScorerWorker(settings, db))
-        
-        # 7. File Generator - Generate summaries for file collections
-        pool.add_worker(FileGeneratorWorker(settings, db))
-        
-        print()
-        print("=" * 80)
-        print("✅ Self-improving worker pipeline started!")
-        print("   Pipeline: OCR → Classify → Score → Summarize → Score → Complete")
-        print("   File Generator: Summarizes document collections")
-        print("   Prompts evolve automatically based on performance feedback")
-        print("   Press Ctrl+C to stop.")
-        print("=" * 80)
-        print()
-        logger.info("Self-improving worker pool started with 6 workers")
-        
-        # Run worker pool with periodic inbox scanning
         try:
-            if run_once:
-                await pool.start_once()
-            else:
-                # Start workers
-                worker_task = asyncio.create_task(pool.start())
-                
-                # Start periodic inbox scanner
-                async def periodic_inbox_scan():
-                    """Periodically scan inbox for new documents."""
-                    while True:
-                        await asyncio.sleep(10)  # Scan every 10 seconds
-                        try:
-                            logger.debug("Periodic inbox scan...")
-                            await scan_inbox_and_create_pending_documents(settings, db)
-                        except Exception as e:
-                            logger.error(f"Error in periodic inbox scan: {e}", exc_info=True)
-                
-                scanner_task = asyncio.create_task(periodic_inbox_scan())
-                
-                # Wait for either task (worker pool runs indefinitely)
-                await asyncio.gather(worker_task, scanner_task, return_exceptions=True)
-        except KeyboardInterrupt:
-            print("\n⏹️  Shutting down workers...")
-            logger.info("Received shutdown signal")
-            await pool.stop()
-            print("👋 Document processor stopped")
-            logger.info("Document processor stopped")
-    finally:
-        # Clean up database connection pool
-        print("\n🔌 Closing database connection pool...")
-        await db.close()
-        logger.info("Database connection pool closed")
+            await process_document_flow(UUID(doc_id), db, bedrock_client)
+            print(f"✅ Document {doc_id} processed")
+        finally:
+            await db.close()
+        
+        return
+    
+    # Scan inbox first
+    print("📂 Scanning inbox for new documents...")
+    await scan_inbox_and_create_pending(settings)
+    print()
+    
+    # Run orchestrator
+    print("🔧 Starting Prefect orchestrator...")
+    await main_orchestrator_flow(settings, run_once=run_once)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ALFRD Document Processor")
+    parser = argparse.ArgumentParser(
+        description="ALFRD Document Processor (Prefect)"
+    )
     parser.add_argument(
         "--once",
         action="store_true",
-        help="Process all pending documents and exit (don't run continuously)"
+        help="Process all pending documents and exit"
+    )
+    parser.add_argument(
+        "--doc-id",
+        help="Process single document by ID"
     )
     args = parser.parse_args()
     
-    asyncio.run(main(run_once=args.once))
+    asyncio.run(main(run_once=args.once, doc_id=args.doc_id))
