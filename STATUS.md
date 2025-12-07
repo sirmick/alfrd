@@ -1,21 +1,23 @@
 # ALFRD - Current Status & Roadmap
 
-**Last Updated:** 2025-12-05 (Series-Based Filing Complete)
+**Last Updated:** 2025-12-07 (Prefect 3.x Migration Complete)
 
-**Current Phase:** Phase 2A Complete ✅
+**Current Phase:** Phase 2A Complete ✅ + Prefect Migration ✅
 
 ---
 
 ## What's Working ✅
 
-### Phase 1C: Self-Improving Pipeline (Complete)
+### Phase 1C: Self-Improving Pipeline (Complete - Migrated to Prefect 3.x)
 
-1. **7-Worker Self-Improving Pipeline**
-   - OCRWorker → ClassifierWorker → ClassifierScorerWorker → SummarizerWorker → SummarizerScorerWorker → FilingWorker → FileGeneratorWorker
-   - State-machine-driven polling (crash-resistant)
-   - Configurable concurrency per worker type
+1. **Prefect 3.x DAG-Based Pipeline**
+   - OCR Task → Classify Task → Score Classification Task → Summarize Task → Score Summary Task → File Task → Complete Task
+   - DAG-based workflow with explicit dependencies
+   - Rate limiting for AWS APIs (3 Textract, 5 Bedrock, 2 file-gen)
+   - PostgreSQL advisory locks for prompt evolution
    - Series-based automatic filing
    - File collection summaries
+   - Prefect UI at http://0.0.0.0:4200 for monitoring
 
 2. **PostgreSQL Database**
    - asyncpg connection pooling (5-20 connections)
@@ -44,8 +46,8 @@
 6. **Series-Based Filing System**
    - Automatic series detection via LLM
    - Hybrid approach: series entities + tags + files
-   - FilingWorker: Creates series, applies tags, generates files
-   - FileGeneratorWorker: Creates collection summaries
+   - File Task: Creates series, applies tags, generates files
+   - File Generation Flow: Creates collection summaries
    - Database tables: series, document_series, files, file_documents, tags, document_tags
 
 7. **API Server**
@@ -128,9 +130,9 @@
 
 ## Statistics
 
-**Lines of Code:** ~8,000+ lines
-- Document Processor: ~1,200 lines (core + 7 workers)
-- Worker Infrastructure: ~2,300 lines (7 workers + scorers + filing)
+**Lines of Code:** ~7,500+ lines (after removing ~1,500 lines of old worker infrastructure)
+- Document Processor: ~900 lines (Prefect flows + tasks)
+- Prefect Infrastructure: ~600 lines (3 flows, 7 tasks, locks utility)
 - MCP Server: ~600 lines (tools + Bedrock client + series detection)
 - API Server: ~1,216 lines (30+ endpoints)
 - Web UI: ~706 lines (3 fully functional pages)
@@ -141,13 +143,14 @@
 
 **Test Coverage:** 20/20 tests passing (100% database module)
 
-**Test Results (samples/test-pipeline.sh):**
+**Test Results:**
 - ✅ OCR: 98.47% confidence (AWS Textract)
 - ✅ Classification: 95% confidence as "bill"
 - ✅ Prompt Evolution: Classifier v1→v2 (score: 0.85), Bill Summarizer v1→v2 (score: 0.85)
-- ✅ Full Pipeline: pending → filed → completed (all 7 workers)
+- ✅ Full Pipeline: pending → ocr_in_progress → classified → summarized → filed → completed
 - ✅ Series Detection: Automatic entity and series_type identification
 - ✅ File Generation: Collection summaries with aggregated content
+- ✅ Prefect Integration: DAG execution with rate limiting and advisory locks
 
 ---
 
@@ -201,20 +204,22 @@ inbox/doc-folder/
 - AWS dependency (but already using Bedrock)
 - Requires AWS credentials
 
-### State-Machine-Driven Workers (2024-11) ✅
+### Prefect 3.x Workflow Orchestration (2025-12) ✅
 
-**Decision:** All state in PostgreSQL, workers poll database
+**Decision:** Migrate from worker polling to Prefect DAG-based workflows
 
 **Rationale:**
-- Crash-resistant (resume from DB state)
-- Observable (query DB for status)
-- No message queue needed for MVP
-- Horizontal scaling (run multiple workers)
+- Explicit task dependencies (no polling loops)
+- Built-in rate limiting for AWS APIs
+- PostgreSQL advisory locks for prompt evolution serialization
+- Better observability via Prefect UI
+- Crash-resistant with automatic retries
+- Horizontal scaling via Prefect deployment
 
-**Configuration:** `shared/config.py`
-- `ocr_workers: int = 3` (AWS Textract TPS limit)
-- `classifier_workers: int = 5` (Bedrock concurrency)
-- Poll intervals: 2-5 seconds per worker type
+**Configuration:** `shared/config.py` + task decorators
+- Rate limits: 3 Textract, 5 Bedrock, 2 file-gen
+- Advisory locks: Per-document-type for prompt evolution
+- Orchestrator: Monitors DB every 5 seconds for new documents
 
 ### MCP Architecture Rule (2024-11) ✅
 
@@ -315,24 +320,20 @@ esec/
 
 ---
 
-## Recent Changes (2025-12-05)
+## Recent Changes (2025-12-07)
 
-### Series-Based Filing Implementation (Phase 2A)
-- Added FilingWorker for automatic series detection and filing
-- Added FileGeneratorWorker for collection summaries
-- Implemented hybrid filing: series entities + tags + files
-- Extended database schema with series, files, tags tables
-- Expanded database.py from 674 to 1,776 lines
-- Updated API server with 30+ endpoints
-- 7-worker pipeline complete
-
-### Documentation Consolidation (2025-12-05)
-- Deleted obsolete files: PROGRESS.md, IMPLEMENTATION_PLAN.md, DOCUMENT_PROCESSING_DESIGN.md, PROMPT_MANAGEMENT_DESIGN.md, PROMPT_MANAGEMENT_IMPLEMENTATION.md, SERIES_BASED_FILING_DESIGN.md
-- Consolidated all design details into ARCHITECTURE.md
-- Updated ARCHITECTURE.md with series-based filing and prompt management sections
-- Fixed worker counts throughout documentation (5 → 7 workers)
-- Updated pipeline diagrams and status flows
+### Prefect 3.x Migration (Phase 2A+)
+- Migrated from worker polling to Prefect 3.x DAG-based workflows
+- Created 7 Prefect tasks replacing worker classes
+- Implemented 3 flows: document_flow, file_flow, orchestrator
+- Added PostgreSQL advisory locks for per-document-type serialization
+- Implemented rate limiting: 3 Textract, 5 Bedrock, 2 file-gen
+- Deleted ~1,500 lines of old worker infrastructure
+- Fixed multiple bugs during testing (imports, status transitions, file generation)
+- Prefect UI available at http://0.0.0.0:4200
+- Updated all documentation to reflect Prefect architecture
+- Deleted migration planning documents (WORKFLOW_REFACTORING_PLAN.md, etc.)
 
 ---
 
-**Status:** Phase 2A complete! 7-worker pipeline with series-based filing, file generation, and self-improving prompts. Next: Complete PWA integration for mobile photo capture.
+**Status:** Phase 2A complete + Prefect migration! DAG-based pipeline with rate limiting, advisory locks, and Prefect UI monitoring. Next: Complete PWA integration and comprehensive testing.

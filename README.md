@@ -75,19 +75,19 @@ data/inbox/
 ```
 User adds document → Folder created in inbox (PENDING)
                      ↓
-              OCRWorker → Textract OCR (OCR_COMPLETED)
+         Prefect OCR Task → Textract OCR (OCR_COMPLETED)
                      ↓
-          ClassifierWorker → DB prompt classification (CLASSIFIED)
+    Prefect Classify Task → DB prompt classification (CLASSIFIED)
                      ↓
-      ClassifierScorerWorker → Scores & evolves prompt (SCORED_CLASSIFICATION)
+Prefect Score Classification Task → Scores & evolves prompt (SCORED_CLASSIFICATION)
                      ↓
-         SummarizerWorker → Type-specific summarization (SUMMARIZED)
+   Prefect Summarize Task → Type-specific summarization (SUMMARIZED)
                      ↓
-      SummarizerScorerWorker → Scores & evolves prompt (SCORED_SUMMARY)
+Prefect Score Summary Task → Scores & evolves prompt (SCORED_SUMMARY)
                      ↓
-            FilingWorker → Series detection & tagging (FILED)
+       Prefect File Task → Series detection & tagging (FILED)
                      ↓
-       FileGeneratorWorker → File summaries (COMPLETED)
+Prefect Complete Task → Updates status (COMPLETED)
 ```
 
 **Self-Improving Features:**
@@ -127,12 +127,12 @@ User adds document → Folder created in inbox (PENDING)
 - **🎯 Scorer workers** - Evaluate and improve classifier/summarizer prompts
 - **🏷️ Secondary tags** - Flexible classification (tax, university, utility, etc.)
 - **📝 Prompt versioning** - All prompt changes tracked with version history
-- **Worker pool architecture** - State-machine-driven parallel processing (7 workers)
-- **OCRWorker** - AWS Textract OCR with 95%+ accuracy
-- **ClassifierWorker** - DB-driven classification with new type suggestions
-- **SummarizerWorker** - Type-specific DB-driven summarization
-- **FilingWorker** - Automatic series detection and filing
-- **FileGeneratorWorker** - Collection summaries for related documents
+- **Prefect 3.x workflow orchestration** - DAG-based pipeline with rate limiting
+- **OCR task** - AWS Textract OCR with 95%+ accuracy
+- **Classify task** - DB-driven classification with new type suggestions
+- **Summarize task** - Type-specific DB-driven summarization
+- **File task** - Automatic series detection and filing
+- **Complete task** - Final status updates and file generation
 - **Folder-based document input** with `meta.json` metadata
 - **Block-level data preservation** (PAGE, LINE, WORD with bounding boxes)
 - **Multi-document folders** (process multiple images as single document)
@@ -344,22 +344,22 @@ No wrapper scripts or environment setup needed!
 - [x] Test suite
 - [x] Helper scripts
 
-### Phase 1B: Worker Pool Architecture ✅
-- [x] BaseWorker + WorkerPool classes
-- [x] OCRWorker with AWS Textract
-- [x] ClassifierWorker with MCP integration
-- [x] WorkflowWorker with type-specific handlers
+### Phase 1B: Prefect Workflow Architecture ✅
+- [x] Prefect 3.x tasks and flows
+- [x] OCR task with AWS Textract
+- [x] Classify task with MCP integration
+- [x] Type-specific summarization tasks
 - [x] MCP tools (classify_document, summarize_bill)
 - [x] BedrockClient for AWS Bedrock API
-- [x] Main orchestrator running all workers
+- [x] Orchestrator flow with database monitoring
 
 ### Phase 1C: Self-Improving Prompts ✅
 - [x] Prompts table for classifier and summarizers
 - [x] Classification suggestions table
 - [x] Document types table (dynamic)
-- [x] ClassifierScorerWorker with prompt evolution
-- [x] SummarizerScorerWorker with prompt evolution
-- [x] Generic SummarizerWorker (replaces hardcoded handlers)
+- [x] Score classification task with prompt evolution
+- [x] Score summary task with prompt evolution
+- [x] Generic summarize task (replaces hardcoded handlers)
 - [x] Dynamic classification with new type suggestions
 - [x] Secondary tags for flexible classification
 - [x] Prompt versioning and performance tracking
@@ -417,7 +417,7 @@ See `api-server/src/api_server/db/schema.sql` for complete schema.
 - **Test Coverage**: 45+ tests passing (PostgreSQL database + pipeline + JSON flattening)
 - **OCR Accuracy**: 95%+ with AWS Textract
 - **Processing Speed**: ~2-3 seconds per page
-- **Worker Architecture**: 7 workers (OCR, Classifier, ClassifierScorer, Summarizer, SummarizerScorer, Filing, FileGenerator)
+- **Workflow Architecture**: Prefect 3.x DAG with 7 tasks (OCR, Classify, Score Classification, Summarize, Score Summary, File, Complete)
 - **MCP Integration**: Bedrock with Claude Sonnet 4 + Amazon Nova Lite
 - **Prompt Evolution**: Automatic improvement based on performance feedback
 - **Document Types**: 6 default types (bill, finance, school, event, junk, generic) + unlimited LLM-suggested types

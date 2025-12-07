@@ -46,15 +46,15 @@ Personal document management system with AI-powered processing and self-improvin
 │                          └────────┬────────┘                 │
 │                                   │                           │
 │  ┌───────────────────────────────▼────────────────────────┐ │
-│  │         Document Processor (5-Worker Pipeline)         │ │
+│  │    Document Processor (Prefect 3.x DAG Pipeline)       │ │
 │  │                                                          │ │
-│  │  OCRWorker → ClassifierWorker → ClassifierScorerWorker │ │
+│  │  OCR Task → Classify Task → Score Classification Task  │ │
 │  │     ↓              ↓                    ↓               │ │
 │  │  AWS Textract   AWS Bedrock      Prompt Evolution      │ │
 │  │                                                          │ │
-│  │  SummarizerWorker → SummarizerScorerWorker             │ │
-│  │     ↓                      ↓                            │ │
-│  │  Type-Specific      Prompt Evolution                    │ │
+│  │  Summarize Task → Score Summary Task → File Task       │ │
+│  │     ↓                    ↓                  ↓           │ │
+│  │  Type-Specific    Prompt Evolution   Series Detection  │ │
 │  └──────────────────────────────────────────────────────────┘ │
 │                                                               │
 └─────────────────────────────────────────────────────────────┘
@@ -69,19 +69,19 @@ Personal document management system with AI-powered processing and self-improvin
 ```
 User uploads folder → pending
          ↓
-    OCRWorker (AWS Textract) → ocr_completed
+    OCR Task (AWS Textract) → ocr_in_progress → ocr_completed
          ↓
-    ClassifierWorker (Bedrock + DB prompts) → classified
+    Classify Task (Bedrock + DB prompts) → classified
          ↓
-    ClassifierScorerWorker (evaluate & evolve) → scored_classification
+    Score Classification Task (evaluate & evolve) → scored_classification
          ↓
-    SummarizerWorker (type-specific) → summarized
+    Summarize Task (type-specific) → summarized
          ↓
-    SummarizerScorerWorker (evaluate & evolve) → scored_summary
+    Score Summary Task (evaluate & evolve) → scored_summary
          ↓
-    FilingWorker (series detection & tagging) → filed
+    File Task (series detection & tagging) → filed
          ↓
-    FileGeneratorWorker (file summaries) → completed
+    Complete Task (final status update) → completed
 ```
 
 ### Document Status Values
@@ -116,16 +116,17 @@ User uploads folder → pending
 - `classification_suggestions` - LLM-suggested types for review
 - Full schema: [`api-server/src/api_server/db/schema.sql`](api-server/src/api_server/db/schema.sql)
 
-### 2. State-Machine-Driven Workers
+### 2. Prefect 3.x Workflow Orchestration
 
 **Why:**
-- All state in database (not in-memory) → crash-resistant
-- Workers poll PostgreSQL for documents in specific statuses
-- Observable: `SELECT status, COUNT(*) FROM documents GROUP BY status`
-- Horizontal scaling: Run multiple worker instances
-- No message queues needed for MVP
+- DAG-based pipeline with explicit task dependencies
+- Built-in rate limiting for AWS API concurrency (3 Textract, 5 Bedrock, 2 file-gen)
+- PostgreSQL advisory locks for per-document-type serialization (prompt evolution)
+- Crash-resistant with automatic retries
+- Observable via Prefect UI (http://0.0.0.0:4200)
+- All state in database (not in-memory)
 
-**Configuration:** See [`shared/config.py`](shared/config.py)
+**Configuration:** See [`shared/config.py`](shared/config.py) and task decorators
 
 ### 3. Self-Improving Prompts
 
@@ -191,16 +192,17 @@ esec/
 │   └── src/api_server/
 │       ├── main.py          # 30+ endpoints including /flatten
 │       └── db/schema.sql
-├── document-processor/      # 7-worker pipeline
+├── document-processor/      # Prefect 3.x pipeline
 │   └── src/document_processor/
-│       ├── main.py          # Orchestrator
-│       ├── workers.py       # BaseWorker + WorkerPool
-│       ├── ocr_worker.py
-│       ├── classifier_worker.py
-│       ├── summarizer_worker.py
-│       ├── scorer_workers.py
-│       ├── filing_worker.py          # Series detection & filing
-│       ├── file_generator_worker.py  # File summaries
+│       ├── main.py          # Prefect orchestrator entry point
+│       ├── flows/
+│       │   ├── document_flow.py    # Main processing DAG
+│       │   ├── file_flow.py        # File generation flow
+│       │   └── orchestrator.py     # DB monitoring orchestrator
+│       ├── tasks/
+│       │   └── document_tasks.py   # All 7 Prefect tasks
+│       ├── utils/
+│       │   └── locks.py            # PostgreSQL advisory locks
 │       └── extractors/aws_textract.py
 ├── mcp-server/              # LLM tools (used as library)
 │   └── src/mcp_server/
@@ -211,7 +213,7 @@ esec/
 │       ├── components/DataTable.jsx  # Flattened data display
 │       └── pages/FileDetailPage.jsx  # Shows flattened table
 ├── shared/                  # Shared utilities
-│   ├── database.py          # PostgreSQL client (674 lines)
+│   ├── database.py          # PostgreSQL client (1776 lines)
 │   ├── json_flattener.py    # JSONB to DataFrame conversion (428 lines)
 │   ├── config.py
 │   └── tests/
@@ -389,8 +391,8 @@ Documents are automatically organized into **series** - recurring collections of
 
 ### How It Works
 
-**FilingWorker Process:**
-1. Polls for documents with status='summarized'
+**File Task Process:**
+1. Triggered for documents with status='scored_summary'
 2. Calls `detect_series` MCP tool to analyze document and identify:
    - Entity name (e.g., "Pacific Gas & Electric")
    - Series type (e.g., "monthly_utility_bill")
@@ -416,9 +418,9 @@ Documents are automatically organized into **series** - recurring collections of
 - `files` - Auto-generated document collections
 - `file_documents` - File-document associations
 
-### FileGeneratorWorker
+### File Generation Flow
 Generates summaries for file collections:
-1. Polls for files with status='pending' or 'outdated'
+1. Triggered for files with status='pending' or 'outdated'
 2. Fetches all documents matching file's tags
 3. Builds aggregated content (reverse chronological)
 4. Calls `summarize_file` MCP tool
@@ -426,7 +428,7 @@ Generates summaries for file collections:
 6. Sets status='generated'
 
 **File Types:**
-- **LLM-generated**: Created automatically by FilingWorker
+- **LLM-generated**: Created automatically by file task
 - **User-created**: Manual file creation via API
 
 ## Prompt Management System

@@ -2,9 +2,9 @@
 
 **Automated Ledger & Filing Research Database**
 
-> **Current Status:** Phase 1C Complete (Self-Improving Pipeline) + PostgreSQL Migration ✅
+> **Current Status:** Phase 1C Complete + Prefect 3.x Migration ✅
 >
-> 5-worker self-improving pipeline with PostgreSQL database and Ionic React PWA interface.
+> Prefect 3.x DAG-based pipeline with PostgreSQL database and Ionic React PWA interface.
 
 ## Table of Contents
 
@@ -212,19 +212,23 @@ data/inbox/
 
 ### 2. Process Documents
 
-The document processor runs a 5-worker pipeline:
+The document processor runs a Prefect 3.x DAG pipeline:
 
 ```bash
 # Run processor (processes all inbox documents)
 ./scripts/start-processor
 ```
 
-**Pipeline stages:**
-1. **OCRWorker** - AWS Textract OCR extraction
-2. **ClassifierWorker** - Document type classification (bill/finance/junk/etc)
-3. **ClassifierScorerWorker** - Evaluate and improve classifier prompt
-4. **SummarizerWorker** - Generate type-specific summary
-5. **SummarizerScorerWorker** - Evaluate and improve summarizer prompts
+**Pipeline stages (7 Prefect tasks):**
+1. **OCR Task** - AWS Textract OCR extraction
+2. **Classify Task** - Document type classification (bill/finance/junk/etc)
+3. **Score Classification Task** - Evaluate and improve classifier prompt
+4. **Summarize Task** - Generate type-specific summary
+5. **Score Summary Task** - Evaluate and improve summarizer prompts
+6. **File Task** - Series detection and filing
+7. **Complete Task** - Final status update
+
+**Prefect UI:** Access workflow monitoring at http://0.0.0.0:4200
 
 ### 3. View Results
 
@@ -356,12 +360,15 @@ esec/
 │   └── tests/
 ├── document-processor/      # Document processing workers
 │   ├── src/document_processor/
-│   │   ├── main.py         # Worker orchestrator
-│   │   ├── workers.py      # Base worker classes
-│   │   ├── ocr_worker.py   # AWS Textract OCR
-│   │   ├── classifier_worker.py      # Classification
-│   │   ├── summarizer_worker.py      # Summarization
-│   │   ├── scorer_workers.py         # Prompt evolution
+│   │   ├── main.py         # Prefect orchestrator entry point
+│   │   ├── flows/
+│   │   │   ├── document_flow.py    # Main processing DAG
+│   │   │   ├── file_flow.py        # File generation flow
+│   │   │   └── orchestrator.py     # DB monitoring orchestrator
+│   │   ├── tasks/
+│   │   │   └── document_tasks.py   # All 7 Prefect tasks
+│   │   ├── utils/
+│   │   │   └── locks.py            # PostgreSQL advisory locks
 │   │   └── extractors/
 │   │       └── aws_textract.py       # Textract integration
 │   └── tests/
@@ -534,11 +541,10 @@ Extract deeply nested JSONB data from the `structured_data` field into pandas Da
 
 - **See [`ARCHITECTURE.md`](ARCHITECTURE.md)** - System design and architecture
 - **See [`STATUS.md`](STATUS.md)** - Current development status
-- **See [`DOCUMENT_PROCESSING_DESIGN.md`](DOCUMENT_PROCESSING_DESIGN.md)** - Worker pipeline details
 - **See [`docs/JSON_FLATTENING.md`](docs/JSON_FLATTENING.md)** - Data extraction guide
 
 ---
 
 **🚀 Ready to process documents with AI-powered OCR and classification!**
 
-**Last Updated:** 2025-12-06 (JSON Flattening Complete)
+**Last Updated:** 2025-12-07 (Prefect 3.x Migration Complete)
