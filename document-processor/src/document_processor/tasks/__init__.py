@@ -1,21 +1,21 @@
-"""Prefect tasks for document processing."""
+"""Simple asyncio tasks for document processing."""
 
 from .document_tasks import (
-    ocr_task,
-    classify_task,
-    summarize_task,
-    score_classification_task,
-    score_summary_task,
-    file_task,
-    generate_file_summary_task
+    ocr_step,
+    classify_step,
+    summarize_step,
+    score_classification_step,
+    score_summary_step,
+    file_step,
+    generate_file_summary_step
 )
 
 __all__ = [
-    'ocr_task',
-    'classify_task',
-    'summarize_task',
-    'score_classification_task',
-    'score_summary_task',
-    'file_task',
-    'generate_file_summary_task'
+    'ocr_step',
+    'classify_step',
+    'summarize_step',
+    'score_classification_step',
+    'score_summary_step',
+    'file_step',
+    'generate_file_summary_step'
 ]

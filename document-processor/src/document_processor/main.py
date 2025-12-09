@@ -1,10 +1,9 @@
-"""Prefect-based document processor entry point."""
+"""Simple asyncio document processor entry point."""
 
 import asyncio
 import argparse
 from pathlib import Path
 import sys
-import os
 from uuid import UUID
 
 # Path setup
@@ -14,11 +13,7 @@ sys.path.insert(0, str(_script_dir / "mcp-server" / "src"))  # MCP server source
 sys.path.insert(0, str(Path(__file__).parent.parent))  # document-processor/src
 
 from shared.config import Settings
-from shared.database import AlfrdDatabase
-from shared.types import DocumentStatus
-from mcp_server.llm.bedrock import BedrockClient
-from document_processor.flows.orchestrator import main_orchestrator_flow
-from document_processor.flows import process_document_flow
+from document_processor.orchestrator import SimpleOrchestrator
 
 
 
@@ -28,13 +23,6 @@ async def main(run_once: bool = False, doc_id: str = None):
     # Initialize ALFRD logging system
     from shared.logging_config import AlfrdLogger
     AlfrdLogger.setup()
-    
-    # Configure Prefect server to listen on 0.0.0.0 for Docker
-    os.environ.setdefault("PREFECT_SERVER_API_HOST", "0.0.0.0")
-    os.environ.setdefault("PREFECT_API_URL", "http://0.0.0.0:4200/api")
-    
-    # Disable concurrency limit warnings - limits are advisory only in local mode
-    os.environ["PREFECT_LOGGING_LEVEL"] = "INFO"
     
     settings = Settings()
     
@@ -46,7 +34,7 @@ async def main(run_once: bool = False, doc_id: str = None):
     )
     
     print("\n" + "=" * 80)
-    print("🚀 ALFRD Document Processor - Prefect Mode")
+    print("🚀 ALFRD Document Processor - Simple Asyncio Mode")
     if run_once:
         print("   Mode: Run once and exit")
     if doc_id:
@@ -63,35 +51,30 @@ async def main(run_once: bool = False, doc_id: str = None):
     print(f"   File Generation Tasks: {settings.prefect_file_generation_workers} concurrent")
     print()
     
+    # Create orchestrator
+    orchestrator = SimpleOrchestrator(settings)
+    
     # Process single document
     if doc_id:
         print(f"Processing document {doc_id}...")
-        
-        db = AlfrdDatabase(settings.database_url)
-        await db.initialize()
-        
-        bedrock_client = BedrockClient(
-            aws_access_key_id=settings.aws_access_key_id,
-            aws_secret_access_key=settings.aws_secret_access_key,
-            aws_region=settings.aws_region
-        )
+        await orchestrator.initialize()
         
         try:
-            await process_document_flow(UUID(doc_id), db, bedrock_client)
+            await orchestrator._process_document(UUID(doc_id))
             print(f"✅ Document {doc_id} processed")
         finally:
-            await db.close()
+            await orchestrator.db.close()
         
         return
     
     # Run orchestrator (it will scan inbox periodically)
-    print("🔧 Starting Prefect orchestrator...")
-    await main_orchestrator_flow(settings, run_once=run_once)
+    print("🔧 Starting simple asyncio orchestrator...")
+    await orchestrator.run(run_once=run_once)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="ALFRD Document Processor (Prefect)"
+        description="ALFRD Document Processor (Simple Asyncio)"
     )
     parser.add_argument(
         "--once",

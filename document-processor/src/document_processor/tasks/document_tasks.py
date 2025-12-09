@@ -1,7 +1,5 @@
-"""Document processing tasks with Prefect concurrency control."""
+"""Document processing tasks with asyncio concurrency control."""
 
-from prefect import task
-from prefect.concurrency.asyncio import rate_limit
 from uuid import UUID
 import logging
 import asyncio
@@ -28,23 +26,12 @@ _bedrock_semaphore = asyncio.Semaphore(_settings.prefect_bedrock_workers)
 _file_gen_semaphore = asyncio.Semaphore(_settings.prefect_file_generation_workers)
 
 
-@task(
-    name="OCR Document",
-    retries=2,
-    retry_delay_seconds=30,
-    tags=["ocr", "aws"],
-    cache_policy=None  # Disable caching - db can't be serialized
-)
-async def ocr_task(doc_id: UUID, db: AlfrdDatabase) -> str:
+async def ocr_step(doc_id: UUID, db: AlfrdDatabase) -> str:
     """
     Extract text using AWS Textract.
     
-    Limited to 3 concurrent executions via asyncio semaphore + Prefect rate limiting.
+    Limited to 3 concurrent executions via asyncio semaphore.
     """
-    # Dual concurrency control:
-    # 1. Prefect rate limiting (enforced only with Prefect Server)
-    await rate_limit("aws-textract")
-    # 2. Asyncio semaphore (enforced in all modes including dev)
     async with _textract_semaphore:
         return await _ocr_task_impl(doc_id, db)
 
@@ -197,20 +184,13 @@ async def _ocr_task_impl(doc_id: UUID, db: AlfrdDatabase) -> str:
         raise
 
 
-@task(
-    name="Classify Document",
-    retries=2,
-    tags=["classify", "llm"],
-    cache_policy=None  # Disable caching
-)
-async def classify_task(
+async def classify_step(
     doc_id: UUID,
     extracted_text: str,
     db: AlfrdDatabase,
     bedrock_client: BedrockClient
 ) -> Dict[str, Any]:
     """Classify document using Bedrock LLM."""
-    await rate_limit("aws-bedrock")
     async with _bedrock_semaphore:
         return await _classify_task_impl(doc_id, extracted_text, db, bedrock_client)
 
@@ -309,13 +289,7 @@ async def _classify_task_impl(
         raise
 
 
-@task(
-    name="Summarize Document",
-    retries=2,
-    tags=["summarize", "llm"],
-    cache_policy=None  # Disable caching
-)
-async def summarize_task(
+async def summarize_step(
     doc_id: UUID,
     db: AlfrdDatabase,
     bedrock_client: BedrockClient
@@ -326,7 +300,6 @@ async def summarize_task(
     CRITICAL: Only ONE document of each type can be summarized at a time
     to prevent prompt evolution conflicts.
     """
-    await rate_limit("aws-bedrock")
     async with _bedrock_semaphore:
         return await _summarize_task_impl(doc_id, db, bedrock_client)
 
@@ -414,19 +387,13 @@ async def _summarize_task_impl(
         raise
 
 
-@task(
-    name="Score Classification",
-    tags=["scoring", "llm"],
-    cache_policy=None  # Disable caching
-)
-async def score_classification_task(
+async def score_classification_step(
     doc_id: UUID,
     classification: Dict[str, Any],
     db: AlfrdDatabase,
     bedrock_client: BedrockClient
 ) -> float:
     """Score classification quality and update prompt if improved."""
-    await rate_limit("aws-bedrock")
     async with _bedrock_semaphore:
         return await _score_classification_task_impl(doc_id, classification, db, bedrock_client)
 
@@ -535,18 +502,12 @@ async def _score_classification_task_impl(
         raise
 
 
-@task(
-    name="Score Summary",
-    tags=["scoring", "llm"],
-    cache_policy=None  # Disable caching
-)
-async def score_summary_task(
+async def score_summary_step(
     doc_id: UUID,
     db: AlfrdDatabase,
     bedrock_client: BedrockClient
 ) -> float:
     """Score summary quality and update prompt if improved."""
-    await rate_limit("aws-bedrock")
     async with _bedrock_semaphore:
         return await _score_summary_task_impl(doc_id, db, bedrock_client)
 
@@ -646,12 +607,7 @@ async def _score_summary_task_impl(
         raise
 
 
-@task(
-    name="File Document (Series)",
-    tags=["filing", "llm"],
-    cache_policy=None  # Disable caching
-)
-async def file_task(
+async def file_step(
     doc_id: UUID,
     db: AlfrdDatabase,
     bedrock_client: BedrockClient
@@ -726,18 +682,12 @@ async def file_task(
         raise
 
 
-@task(
-    name="Generate File Summary",
-    tags=["file-generation", "llm"],
-    cache_policy=None  # Disable caching
-)
-async def generate_file_summary_task(
+async def generate_file_summary_step(
     file_id: UUID,
     db: AlfrdDatabase,
     bedrock_client: BedrockClient
 ) -> str:
     """Generate summary for file collection."""
-    await rate_limit("file-generation")
     async with _file_gen_semaphore:
         return await _generate_file_summary_task_impl(file_id, db, bedrock_client)
 
