@@ -330,15 +330,45 @@ async def _summarize_task_impl(
             )
             if not prompt:
                 logger.warning(
-                    f"No summarizer prompt for {document_type}, using generic"
+                    f"No summarizer prompt for {document_type}, trying generic"
                 )
                 prompt = await db.get_active_prompt(
                     PromptType.SUMMARIZER,
                     'generic'
                 )
-            
-            if not prompt:
-                raise ValueError(f"No summarizer prompt found for {document_type}")
+                
+                # If still no prompt, create a basic one for this new type
+                if not prompt:
+                    from uuid import uuid4
+                    logger.warning(
+                        f"No generic prompt found, creating basic summarizer for {document_type}"
+                    )
+                    
+                    # Create a basic generic summarizer prompt
+                    basic_prompt = f"""Extract key information from this {document_type} document.
+
+Return a JSON object with:
+- summary: Brief summary of the document
+- key_fields: Dictionary of important fields extracted from the document
+
+Focus on dates, amounts, names, and other relevant details."""
+                    
+                    await db.create_prompt(
+                        prompt_id=uuid4(),
+                        prompt_type=PromptType.SUMMARIZER,
+                        document_type=document_type,
+                        prompt_text=basic_prompt,
+                        version=1,
+                        performance_score=0.5  # Low initial score to encourage evolution
+                    )
+                    
+                    # Fetch the newly created prompt
+                    prompt = await db.get_active_prompt(
+                        PromptType.SUMMARIZER,
+                        document_type
+                    )
+                    
+                    logger.info(f"Created basic summarizer prompt for {document_type}")
             
             # Load LLM JSON if available
             llm_data = None
