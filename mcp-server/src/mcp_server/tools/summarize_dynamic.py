@@ -45,8 +45,7 @@ def summarize_document_dynamic(
     # Build the prompt with available data
     prompt_parts = [summarizer_prompt, "\n\n"]
     
-    prompt_parts.append(f"Document Type: {document_type}\n")
-    prompt_parts.append(f"Filename: {filename}\n\n")
+    prompt_parts.append(f"Document Type: {document_type}\n\n")
     
     if llm_data:
         # Include block-level data for better extraction
@@ -73,6 +72,8 @@ def summarize_document_dynamic(
     
     try:
         # Invoke Bedrock with low temperature for accurate extraction
+        logger.debug(f"Summarizing {filename} (type: {document_type})")
+        
         response = bedrock_client.invoke_with_system_and_user(
             system="You are a document extraction expert. Extract structured data accurately from documents.",
             user_message=user_message,
@@ -98,9 +99,7 @@ def summarize_document_dynamic(
                     # Return raw text if no JSON found
                     result_data = {"summary": response}
         
-        logger.info(
-            f"Document summarized: {len(result_data)} fields extracted"
-        )
+        logger.debug(f"Summarized {filename} ({len(result_data)} fields)")
         
         return result_data
         

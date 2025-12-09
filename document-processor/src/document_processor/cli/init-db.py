@@ -33,12 +33,12 @@ async def init_database():
     print(f"⚠️  WARNING: This will DELETE all existing data in {data_dir}")
     print()
     
-    # Clear everything in data directory (except postgres)
+    # Clear everything in data directory (except postgres and cache)
     if data_dir.exists():
         print(f"🗑️  Clearing data directory: {data_dir}")
         for item in data_dir.iterdir():
-            if item.name == "postgres":
-                continue  # Don't delete PostgreSQL data
+            if item.name in ("postgres", "cache"):
+                continue  # Don't delete PostgreSQL data or cache
             if item.is_dir():
                 shutil.rmtree(item)
                 print(f"   Deleted directory: {item.name}")
@@ -50,6 +50,7 @@ async def init_database():
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "inbox").mkdir(exist_ok=True)
     (data_dir / "documents").mkdir(exist_ok=True)
+    (data_dir / "cache").mkdir(exist_ok=True)
     print()
     
     print(f"Initializing fresh database at {settings.database_url}")

@@ -21,107 +21,14 @@ from document_processor.flows.orchestrator import main_orchestrator_flow
 from document_processor.flows import process_document_flow
 
 
-async def scan_inbox_and_create_pending(settings: Settings):
-    """
-    Scan inbox for new folders and create pending database entries.
-    
-    (Existing logic from old main.py - unchanged)
-    """
-    from document_processor.detector import FileDetector
-    from shared.constants import META_JSON_FILENAME
-    from datetime import datetime, timezone
-    import json
-    import shutil
-    
-    detector = FileDetector()
-    inbox = settings.inbox_path
-    
-    if not inbox.exists():
-        inbox.mkdir(parents=True, exist_ok=True)
-        return
-    
-    folders = [f for f in inbox.iterdir() if f.is_dir()]
-    if not folders:
-        return
-    
-    # Get existing document IDs
-    db = AlfrdDatabase(settings.database_url)
-    await db.initialize()
-    
-    try:
-        all_docs = await db.list_documents(limit=10000)
-        existing_ids = set(doc['id'] for doc in all_docs)
-        
-        new_count = 0
-        for folder_path in folders:
-            is_valid, error, meta = detector.validate_document_folder(folder_path)
-            
-            if not is_valid:
-                continue
-            
-            doc_id = UUID(meta.get('id'))
-            
-            if doc_id in existing_ids:
-                continue
-            
-            # Create storage paths
-            now = datetime.now(timezone.utc)
-            year_month = now.strftime("%Y/%m")
-            base_path = settings.documents_path / year_month
-            raw_path = base_path / "raw" / str(doc_id)
-            text_path = base_path / "text"
-            meta_path = base_path / "meta"
-            
-            for path in [raw_path, text_path, meta_path]:
-                path.mkdir(parents=True, exist_ok=True)
-            
-            # Copy folder
-            shutil.copytree(folder_path, raw_path, dirs_exist_ok=True)
-            
-            # Create empty text file
-            text_file = text_path / f"{doc_id}.txt"
-            text_file.write_text("")
-            
-            # Save metadata
-            detailed_meta = {
-                'original_meta': meta,
-                'processed_at': now.isoformat()
-            }
-            meta_file = meta_path / f"{doc_id}.json"
-            meta_file.write_text(json.dumps(detailed_meta, indent=2))
-            
-            # Calculate size
-            total_size = sum(
-                f.stat().st_size
-                for f in folder_path.rglob('*')
-                if f.is_file()
-            )
-            
-            # Create document record
-            await db.create_document(
-                doc_id=doc_id,
-                filename=folder_path.name,
-                original_path=str(folder_path),
-                file_type='folder',
-                file_size=total_size,
-                status=DocumentStatus.PENDING,
-                raw_document_path=str(raw_path),
-                extracted_text_path=str(text_file),
-                metadata_path=str(meta_file),
-                folder_path=str(folder_path)
-            )
-            
-            new_count += 1
-        
-        if new_count > 0:
-            print(f"✅ Registered {new_count} new document(s)")
-    
-    finally:
-        await db.close()
 
 
 async def main(run_once: bool = False, doc_id: str = None):
     """Main entry point."""
+    # Initialize ALFRD logging system
+    from shared.logging_config import AlfrdLogger
+    AlfrdLogger.setup()
+    
     # Configure Prefect server to listen on 0.0.0.0 for Docker
     os.environ.setdefault("PREFECT_SERVER_API_HOST", "0.0.0.0")
     os.environ.setdefault("PREFECT_API_URL", "http://0.0.0.0:4200/api")
@@ -130,6 +37,13 @@ async def main(run_once: bool = False, doc_id: str = None):
     os.environ["PREFECT_LOGGING_LEVEL"] = "INFO"
     
     settings = Settings()
+    
+    # Limit ThreadPoolExecutor threads for blocking I/O operations
+    import concurrent.futures
+    loop = asyncio.get_event_loop()
+    loop.set_default_executor(
+        concurrent.futures.ThreadPoolExecutor(max_workers=settings.prefect_max_threads)
+    )
     
     print("\n" + "=" * 80)
     print("🚀 ALFRD Document Processor - Prefect Mode")
@@ -140,8 +54,13 @@ async def main(run_once: bool = False, doc_id: str = None):
     print("=" * 80)
     print()
     
-    print("📊 Concurrency Limits: aws-textract=3, aws-bedrock=5, file-generation=2")
-    print("   (Advisory only - enforced in production Prefect Server)")
+    print(f"📊 Concurrency Limits:")
+    print(f"   Max Threads: {settings.prefect_max_threads}")
+    print(f"   Document Flows: {settings.prefect_max_document_flows} concurrent")
+    print(f"   File Flows: {settings.prefect_max_file_flows} concurrent")
+    print(f"   Textract Tasks: {settings.prefect_textract_workers} concurrent")
+    print(f"   Bedrock Tasks: {settings.prefect_bedrock_workers} concurrent")
+    print(f"   File Generation Tasks: {settings.prefect_file_generation_workers} concurrent")
     print()
     
     # Process single document
@@ -165,12 +84,7 @@ async def main(run_once: bool = False, doc_id: str = None):
         
         return
     
-    # Scan inbox first
-    print("📂 Scanning inbox for new documents...")
-    await scan_inbox_and_create_pending(settings)
-    print()
-    
-    # Run orchestrator
+    # Run orchestrator (it will scan inbox periodically)
     print("🔧 Starting Prefect orchestrator...")
     await main_orchestrator_flow(settings, run_once=run_once)
 

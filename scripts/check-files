@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Check file status and reset stuck files
+
+cd "$(dirname "$0")/.."
+. venv/bin/activate
+
+python3 << 'EOF'
+import asyncio
+from shared.database import AlfrdDatabase
+from shared.config import Settings
+from datetime import datetime, timezone
+
+async def check_and_reset_files():
+    settings = Settings()
+    db = AlfrdDatabase(settings.database_url)
+    await db.initialize()
+    
+    # Check all files
+    files = await db.list_files(limit=50)
+    print(f"Total files: {len(files)}\n")
+    
+    for f in files:
+        print(f"File ID: {f['id']}")
+        print(f"  Status: {f['status']}")
+        print(f"  Tags: {f['tags']}")
+        print(f"  Created: {f.get('created_at')}")
+        print(f"  Updated: {f.get('updated_at')}")
+        print(f"  Document Count: {f.get('document_count', 0)}")
+        print()
+        
+        # Reset stuck 'generating' files older than 5 minutes
+        if f['status'] == 'generating':
+            updated_at = f.get('updated_at')
+            if updated_at:
+                age = (datetime.now(timezone.utc) - updated_at).total_seconds()
+                if age > 300:  # 5 minutes
+                    print(f"  ⚠️  File stuck in 'generating' for {age:.0f}s - resetting to 'pending'")
+                    await db.update_file(f['id'], status='pending')
+    
+    # Show pending files
+    pending = await db.get_files_by_status(['pending', 'outdated'], limit=20)
+    print(f"\nPending/Outdated files ready for generation: {len(pending)}")
+    for f in pending:
+        print(f"  - {f['id']}: {f['tags']}")
+    
+    await db.close()
+
+asyncio.run(check_and_reset_files())
+EOF

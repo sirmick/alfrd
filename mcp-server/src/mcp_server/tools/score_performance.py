@@ -46,7 +46,6 @@ Current Classifier Prompt:
 {classifier_prompt}
 
 Document classified:
-- Filename: {document_info.get('filename')}
 - Text (first 2000 chars): {document_info.get('extracted_text', '')[:2000]}
 
 Classification result:
@@ -137,7 +136,6 @@ Current Summarizer Prompt:
 
 Document summarized:
 - Type: {document_info.get('document_type')}
-- Filename: {document_info.get('filename')}
 - Text (first 2000 chars): {document_info.get('extracted_text', '')[:2000]}
 
 Summary result:

@@ -58,7 +58,6 @@ Existing tags (use when applicable): {tags_list}
 
 You may classify the document as one of the known types, OR suggest a new type if none fit well.
 
-Document filename: {filename}
 Document text:
 {extracted_text[:4000]}
 
@@ -74,6 +73,8 @@ Respond with JSON:
     
     try:
         # Invoke Bedrock with low temperature for consistent classification
+        logger.debug(f"Classifying {filename}")
+        
         response = bedrock_client.invoke_with_system_and_user(
             system="You are a document classification expert. Analyze documents and classify them accurately.",
             user_message=user_message,
@@ -115,9 +116,9 @@ Respond with JSON:
             confidence = max(0.0, min(1.0, confidence))
             result_data["confidence"] = confidence
         
-        logger.info(
-            f"Document classified as {result_data['document_type']} "
-            f"with confidence {confidence:.2f}"
+        logger.debug(
+            f"Classified as {result_data['document_type']} "
+            f"(confidence: {confidence:.2%})"
         )
         
         return result_data

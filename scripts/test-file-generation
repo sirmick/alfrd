@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Test file generation manually
+
+cd "$(dirname "$0")/.."
+. venv/bin/activate
+
+python3 << 'EOF'
+import asyncio
+import sys
+from pathlib import Path
+
+# Add paths
+_script_dir = Path(__file__).parent if hasattr(Path(__file__), 'parent') else Path.cwd()
+sys.path.insert(0, str(_script_dir))
+sys.path.insert(0, str(_script_dir / "mcp-server" / "src"))
+sys.path.insert(0, str(_script_dir / "document-processor" / "src"))
+
+from shared.database import AlfrdDatabase
+from shared.config import Settings
+from mcp_server.llm.bedrock import BedrockClient
+from document_processor.tasks.document_tasks import generate_file_summary_task
+from uuid import UUID
+
+async def test_file_generation():
+    settings = Settings()
+    db = AlfrdDatabase(settings.database_url)
+    await db.initialize()
+    
+    bedrock_client = BedrockClient(
+        aws_access_key_id=settings.aws_access_key_id,
+        aws_secret_access_key=settings.aws_secret_access_key,
+        aws_region=settings.aws_region
+    )
+    
+    file_id = UUID('8399ed38-b2eb-41a6-b37e-92223ac4a203')
+    
+    print('Testing file generation...')
+    try:
+        result = await generate_file_summary_task(file_id, db, bedrock_client)
+        print(f'✅ Success! Summary: {result[:200]}...')
+        
+        # Check file status
+        file_info = await db.get_file(file_id)
+        print(f'\nFile Status: {file_info["status"]}')
+        print(f'Summary Text: {file_info.get("summary_text", "None")[:200]}...')
+    except Exception as e:
+        print(f'❌ Error: {type(e).__name__}: {e}')
+        import traceback
+        traceback.print_exc()
+    
+    await db.close()
+
+asyncio.run(test_file_generation())
+EOF

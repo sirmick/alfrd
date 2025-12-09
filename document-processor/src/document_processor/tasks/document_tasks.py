@@ -11,10 +11,21 @@ from pathlib import Path
 
 from shared.database import AlfrdDatabase
 from shared.types import DocumentStatus, PromptType
+from shared.config import Settings
 from mcp_server.llm.bedrock import BedrockClient
 from document_processor.utils.locks import document_type_lock
 
 logger = logging.getLogger(__name__)
+
+# Load settings for configurable worker limits
+_settings = Settings()
+
+# Asyncio semaphores for concurrency enforcement (works without Prefect Server)
+# These ensure limits are respected even in standalone/dev mode
+# Configured via environment variables
+_textract_semaphore = asyncio.Semaphore(_settings.prefect_textract_workers)
+_bedrock_semaphore = asyncio.Semaphore(_settings.prefect_bedrock_workers)
+_file_gen_semaphore = asyncio.Semaphore(_settings.prefect_file_generation_workers)
 
 
 @task(
@@ -28,11 +39,18 @@ async def ocr_task(doc_id: UUID, db: AlfrdDatabase) -> str:
     """
     Extract text using AWS Textract.
     
-    Limited to 3 concurrent executions via Prefect concurrency.
+    Limited to 3 concurrent executions via asyncio semaphore + Prefect rate limiting.
     """
-    # Prefect rate limiting (max 3 concurrent across all workers)
+    # Dual concurrency control:
+    # 1. Prefect rate limiting (enforced only with Prefect Server)
     await rate_limit("aws-textract")
-    
+    # 2. Asyncio semaphore (enforced in all modes including dev)
+    async with _textract_semaphore:
+        return await _ocr_task_impl(doc_id, db)
+
+
+async def _ocr_task_impl(doc_id: UUID, db: AlfrdDatabase) -> str:
+    """Implementation of OCR task (extracted for semaphore wrapping)."""
     from document_processor.extractors.aws_textract import TextractExtractor
     from document_processor.extractors.text import TextExtractor
     from shared.constants import META_JSON_FILENAME
@@ -81,6 +99,7 @@ async def ocr_task(doc_id: UUID, db: AlfrdDatabase) -> str:
             if file_type == 'image':
                 extractor = TextractExtractor()
                 extracted = await extractor.extract_text(file_path)
+                # Cache status logged in aws_clients.py
             elif file_type == 'text':
                 extractor = TextExtractor()
                 extracted = await extractor.extract_text(file_path)
@@ -168,6 +187,12 @@ async def ocr_task(doc_id: UUID, db: AlfrdDatabase) -> str:
         
     except Exception as e:
         logger.error(f"OCR failed for {doc_id}: {e}", exc_info=True)
+        
+        # Structured exception logging
+        from shared.logging_config import log_exception
+        log_exception(e, entity_type='document', entity_id=doc_id,
+                     task_name='ocr_task')
+        
         await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise
 
@@ -186,7 +211,17 @@ async def classify_task(
 ) -> Dict[str, Any]:
     """Classify document using Bedrock LLM."""
     await rate_limit("aws-bedrock")
-    
+    async with _bedrock_semaphore:
+        return await _classify_task_impl(doc_id, extracted_text, db, bedrock_client)
+
+
+async def _classify_task_impl(
+    doc_id: UUID,
+    extracted_text: str,
+    db: AlfrdDatabase,
+    bedrock_client: BedrockClient
+) -> Dict[str, Any]:
+    """Implementation of classify task (extracted for semaphore wrapping)."""
     from mcp_server.tools.classify_dynamic import classify_document_dynamic
     
     logger.info(f"Classifying document {doc_id}")
@@ -264,6 +299,12 @@ async def classify_task(
         
     except Exception as e:
         logger.error(f"Classification failed for {doc_id}: {e}", exc_info=True)
+        
+        # Structured exception logging
+        from shared.logging_config import log_exception
+        log_exception(e, entity_type='document', entity_id=doc_id,
+                     task_name='classify_task')
+        
         await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise
 
@@ -286,7 +327,16 @@ async def summarize_task(
     to prevent prompt evolution conflicts.
     """
     await rate_limit("aws-bedrock")
-    
+    async with _bedrock_semaphore:
+        return await _summarize_task_impl(doc_id, db, bedrock_client)
+
+
+async def _summarize_task_impl(
+    doc_id: UUID,
+    db: AlfrdDatabase,
+    bedrock_client: BedrockClient
+) -> str:
+    """Implementation of summarize task (extracted for semaphore wrapping)."""
     doc = await db.get_document(doc_id)
     document_type = doc['document_type']
     
@@ -353,6 +403,13 @@ async def summarize_task(
             
     except Exception as e:
         logger.error(f"Summarization failed for {doc_id}: {e}", exc_info=True)
+        
+        # Structured exception logging
+        from shared.logging_config import log_exception
+        log_exception(e, entity_type='document', entity_id=doc_id,
+                     task_name='summarize_task',
+                     context={'document_type': doc.get('document_type')})
+        
         await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise
 
@@ -370,7 +427,17 @@ async def score_classification_task(
 ) -> float:
     """Score classification quality and update prompt if improved."""
     await rate_limit("aws-bedrock")
-    
+    async with _bedrock_semaphore:
+        return await _score_classification_task_impl(doc_id, classification, db, bedrock_client)
+
+
+async def _score_classification_task_impl(
+    doc_id: UUID,
+    classification: Dict[str, Any],
+    db: AlfrdDatabase,
+    bedrock_client: BedrockClient
+) -> float:
+    """Implementation of score classification task (extracted for semaphore wrapping)."""
     from mcp_server.tools.score_performance import score_classification
     from uuid import uuid4
     from shared.config import Settings
@@ -458,6 +525,12 @@ async def score_classification_task(
         
     except Exception as e:
         logger.error(f"Classification scoring failed for {doc_id}: {e}", exc_info=True)
+        
+        # Structured exception logging
+        from shared.logging_config import log_exception
+        log_exception(e, entity_type='document', entity_id=doc_id,
+                     task_name='score_classification_task')
+        
         await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise
 
@@ -474,7 +547,16 @@ async def score_summary_task(
 ) -> float:
     """Score summary quality and update prompt if improved."""
     await rate_limit("aws-bedrock")
-    
+    async with _bedrock_semaphore:
+        return await _score_summary_task_impl(doc_id, db, bedrock_client)
+
+
+async def _score_summary_task_impl(
+    doc_id: UUID,
+    db: AlfrdDatabase,
+    bedrock_client: BedrockClient
+) -> float:
+    """Implementation of score summary task (extracted for semaphore wrapping)."""
     from mcp_server.tools.score_performance import score_summarization
     from uuid import uuid4
     from shared.config import Settings
@@ -553,6 +635,13 @@ async def score_summary_task(
         
     except Exception as e:
         logger.error(f"Summary scoring failed for {doc_id}: {e}", exc_info=True)
+        
+        # Structured exception logging
+        from shared.logging_config import log_exception
+        log_exception(e, entity_type='document', entity_id=doc_id,
+                     task_name='score_summary_task',
+                     context={'document_type': doc.get('document_type')})
+        
         await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise
 
@@ -602,8 +691,15 @@ async def file_task(
             metadata=series_data.get('metadata')
         )
         
-        # Add to series
-        await db.add_document_to_series(series['id'], doc_id)
+        # Add to series (with idempotency check)
+        try:
+            await db.add_document_to_series(series['id'], doc_id)
+        except Exception as e:
+            # Check if it's a duplicate key error (already added)
+            if 'duplicate key' in str(e).lower() or 'already exists' in str(e).lower():
+                logger.warning(f"Document {doc_id} already in series {series['id']}, skipping")
+            else:
+                raise
         
         # Create series tag
         entity_slug = series_data['entity'].lower().replace(' ', '-').replace('&', 'and')
@@ -620,6 +716,12 @@ async def file_task(
         
     except Exception as e:
         logger.error(f"Filing failed for {doc_id}: {e}", exc_info=True)
+        
+        # Structured exception logging
+        from shared.logging_config import log_exception
+        log_exception(e, entity_type='document', entity_id=doc_id,
+                     task_name='file_task')
+        
         await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise
 
@@ -635,17 +737,31 @@ async def generate_file_summary_task(
     bedrock_client: BedrockClient
 ) -> str:
     """Generate summary for file collection."""
+    await rate_limit("file-generation")
+    async with _file_gen_semaphore:
+        return await _generate_file_summary_task_impl(file_id, db, bedrock_client)
+
+
+async def _generate_file_summary_task_impl(
+    file_id: UUID,
+    db: AlfrdDatabase,
+    bedrock_client: BedrockClient
+) -> str:
+    """Implementation of file summary generation task (extracted for semaphore wrapping)."""
     from mcp_server.tools.summarize_file import summarize_file
     from datetime import datetime, timezone
-    
-    await rate_limit("file-generation")
     
     logger.info(f"Generating file summary for {file_id}")
     
     try:
         # Get file and documents
+        logger.info(f"Fetching file {file_id}...")
         file = await db.get_file(file_id)
+        logger.info(f"File fetched: {file.get('tags')}")
+        
+        logger.info(f"Fetching documents for file {file_id}...")
         documents = await db.get_file_documents(file_id, order_by="created_at DESC")
+        logger.info(f"Documents fetched: {len(documents)} documents")
         
         if not documents:
             logger.warning(f"No documents for file {file_id}, marking as generated with empty summary")
@@ -698,6 +814,12 @@ async def generate_file_summary_task(
         
     except Exception as e:
         logger.error(f"File summary generation failed for {file_id}: {e}", exc_info=True)
+        
+        # Structured exception logging
+        from shared.logging_config import log_exception
+        log_exception(e, entity_type='file', entity_id=file_id,
+                     task_name='generate_file_summary_task')
+        
         # Mark file as failed so it doesn't keep retrying
         await db.update_file(
             file_id,

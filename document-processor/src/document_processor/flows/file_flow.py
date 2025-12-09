@@ -23,6 +23,10 @@ async def generate_file_summary_flow(
     logger = get_run_logger()
     logger.info(f"Generating file summary for {file_id}")
     
+    # Mark as 'generating' at the START of the flow (like document workflow)
+    # This prevents re-queuing by orchestrator on next iteration
+    await db.update_file(file_id, status='generating')
+    
     summary = await generate_file_summary_task(file_id, db, bedrock_client)
     
     logger.info(f"File {file_id} summary generated")

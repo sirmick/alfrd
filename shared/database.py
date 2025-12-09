@@ -169,6 +169,11 @@ class AlfrdDatabase:
         import logging
         logger = logging.getLogger(__name__)
         
+        # Get old document for state transition logging
+        old_doc = None
+        if 'status' in fields:
+            old_doc = await self.get_document(doc_id)
+        
         # Ensure doc_id is a UUID object
         from uuid import UUID as UUIDType
         if isinstance(doc_id, str):
@@ -211,6 +216,19 @@ class AlfrdDatabase:
         
         async with self.pool.acquire() as conn:
             await conn.execute(query, str(doc_id), *values, utc_now())
+        
+        # Log state transition if status changed
+        if 'status' in fields and old_doc:
+            from shared.logging_config import log_state_transition
+            log_state_transition(
+                entity_type='document',
+                entity_id=doc_id,
+                old_status=old_doc.get('status'),
+                new_status=fields['status'],
+                filename=old_doc.get('filename'),
+                document_type=old_doc.get('document_type'),
+                retry_count=fields.get('retry_count', 0)
+            )
     
     async def get_documents_by_status(self, status: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get documents with specific status.
@@ -1238,6 +1256,11 @@ class AlfrdDatabase:
         
         import json
         
+        # Get old file for state transition logging
+        old_file = None
+        if 'status' in fields:
+            old_file = await self.get_file(file_id)
+        
         # JSONB fields that need JSON serialization
         jsonb_fields = {'summary_metadata'}
         
@@ -1261,6 +1284,16 @@ class AlfrdDatabase:
         
         async with self.pool.acquire() as conn:
             await conn.execute(query, file_id, *values, utc_now())
+        
+        # Log state transition if status changed
+        if 'status' in fields and old_file:
+            from shared.logging_config import log_state_transition
+            log_state_transition(
+                entity_type='file',
+                entity_id=file_id,
+                old_status=old_file.get('status'),
+                new_status=fields['status']
+            )
     
     async def list_files(
         self,
@@ -1585,6 +1618,11 @@ class AlfrdDatabase:
         
         import json
         
+        # Get old series for state transition logging
+        old_series = None
+        if 'status' in fields:
+            old_series = await self.get_series(series_id)
+        
         # JSONB fields that need JSON serialization
         jsonb_fields = {'metadata', 'summary_metadata'}
         
@@ -1608,6 +1646,16 @@ class AlfrdDatabase:
         
         async with self.pool.acquire() as conn:
             await conn.execute(query, series_id, *values, utc_now())
+        
+        # Log state transition if status changed
+        if 'status' in fields and old_series:
+            from shared.logging_config import log_state_transition
+            log_state_transition(
+                entity_type='series',
+                entity_id=series_id,
+                old_status=old_series.get('status'),
+                new_status=fields['status']
+            )
     
     async def add_document_to_series(
         self,

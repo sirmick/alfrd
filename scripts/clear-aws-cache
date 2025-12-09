@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Clear AWS API request cache.
+
+This removes all cached Bedrock and Textract responses from disk.
+"""
+
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from shared.aws_clients import AWSClientManager
+
+
+def main():
+    """Clear the AWS API cache."""
+    print("🗑️  Clearing AWS API cache...")
+    
+    # Get the cache manager and clear it
+    aws = AWSClientManager()
+    
+    # Get stats before clearing
+    stats_before = aws.get_cache_stats()
+    if stats_before.get('cache_enabled'):
+        cached_items = stats_before.get('cached_items', 0)
+        cache_dir = stats_before.get('cache_dir', 'unknown')
+        
+        print(f"\nCache directory: {cache_dir}")
+        print(f"Cached items: {cached_items}")
+        
+        if cached_items > 0:
+            # Clear the cache
+            aws.clear_cache()
+            print(f"\n✅ Deleted {cached_items} cache files")
+        else:
+            print("\n✅ Cache is already empty")
+    else:
+        print("\n⚠️  Cache is disabled in configuration")
+    
+    print("\nDone!")
+
+
+if __name__ == '__main__':
+    main()

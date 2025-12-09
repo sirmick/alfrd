@@ -307,9 +307,11 @@ CREATE TABLE IF NOT EXISTS files (
     -- Status tracking
     status VARCHAR NOT NULL DEFAULT 'pending' CHECK (status IN (
         'pending',
+        'generating',        -- Being processed (prevents re-queuing)
         'generated',
         'outdated',
-        'regenerating'
+        'regenerating',
+        'failed'             -- Generation failed
     )),
     
     -- Timestamps

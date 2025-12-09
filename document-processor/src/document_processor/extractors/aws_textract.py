@@ -1,6 +1,9 @@
-"""AWS Textract OCR extraction for documents."""
+"""AWS Textract OCR extraction for documents.
 
-import boto3
+DEPRECATED: This class now wraps AWSClientManager for backward compatibility.
+New code should use AWSClientManager directly for caching benefits.
+"""
+
 from pathlib import Path
 from typing import Dict
 import sys
@@ -10,10 +13,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 
 from shared.config import Settings
 from shared.constants import TEXTRACT_MAX_SIZE, TEXTRACT_TIMEOUT
+from shared.aws_clients import AWSClientManager
 
 
 class TextractExtractor:
-    """Extract text from images using AWS Textract."""
+    """Extract text from images using AWS Textract.
+    
+    NOTE: This is now a thin wrapper around AWSClientManager.
+    Uses shared client instance for caching and cost tracking.
+    """
     
     def __init__(self, aws_access_key_id: str = None, aws_secret_access_key: str = None, region: str = None):
         """
@@ -24,19 +32,22 @@ class TextractExtractor:
             aws_secret_access_key: AWS secret key (optional, can use env/IAM)
             region: AWS region (default: us-east-1)
         """
-        settings = Settings()
-        
-        # Use provided credentials or fall back to settings
-        self.textract = boto3.client(
-            'textract',
-            region_name=region or settings.aws_region,
-            aws_access_key_id=aws_access_key_id or settings.aws_access_key_id or None,
-            aws_secret_access_key=aws_secret_access_key or settings.aws_secret_access_key or None
+        # Use unified AWS client manager (singleton with caching)
+        self._aws_manager = AWSClientManager(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_region=region,
+            enable_cache=True
         )
+        
+        # Keep reference to boto3 client for backward compatibility
+        self.textract = self._aws_manager._textract_client
     
     async def extract_text(self, image_path: Path) -> Dict:
         """
         Extract text from an image using AWS Textract.
+        
+        Now uses AWSClientManager for automatic caching and cost tracking.
         
         Args:
             image_path: Path to the image file
@@ -45,7 +56,9 @@ class TextractExtractor:
             Dictionary containing:
                 - extracted_text: str - The extracted text content
                 - confidence: float - Average confidence score (0-1)
+                - blocks: dict - Block-level data by type
                 - metadata: dict - Additional metadata
+                - cached: bool - Whether response was from cache
                 
         Raises:
             RuntimeError: If extraction fails or file is too large
@@ -64,67 +77,17 @@ class TextractExtractor:
                     "S3 upload not yet implemented."
                 )
             
-            # Call Textract
-            response = self.textract.detect_document_text(
-                Document={'Bytes': image_bytes}
+            # Call Textract via AWSClientManager (with caching!)
+            result = await self._aws_manager.extract_text_textract(
+                image_bytes=image_bytes,
+                use_cache=True
             )
             
-            # Parse response blocks
-            lines = []
-            blocks_by_type = {'PAGE': [], 'LINE': [], 'WORD': []}
-            total_confidence = 0
-            line_count = 0
-            word_count = 0
+            # Add image format to metadata
+            result['metadata']['image_format'] = image_path.suffix.lower()
             
-            for block in response['Blocks']:
-                block_type = block['BlockType']
-                
-                # Store block information
-                block_info = {
-                    'id': block.get('Id'),
-                    'type': block_type,
-                    'text': block.get('Text', ''),
-                    'confidence': block.get('Confidence', 0),
-                    'geometry': block.get('Geometry', {})
-                }
-                
-                if block_type in blocks_by_type:
-                    blocks_by_type[block_type].append(block_info)
-                
-                # Collect lines for text extraction
-                if block_type == 'LINE':
-                    lines.append(block['Text'])
-                    total_confidence += block.get('Confidence', 0)
-                    line_count += 1
-                elif block_type == 'WORD':
-                    word_count += 1
+            return result
             
-            # Join lines into full text
-            extracted_text = '\n'.join(lines)
-            
-            # Calculate average confidence (convert from 0-100 to 0-1)
-            avg_confidence = (total_confidence / line_count / 100) if line_count > 0 else 0
-            
-            # Get document metadata
-            doc_metadata = response.get('DocumentMetadata', {})
-            
-            return {
-                'extracted_text': extracted_text,
-                'confidence': avg_confidence,
-                'blocks': blocks_by_type,
-                'metadata': {
-                    'extractor': 'aws_textract',
-                    'pages': doc_metadata.get('Pages', 1),
-                    'blocks_total': len(response['Blocks']),
-                    'lines_detected': line_count,
-                    'words_detected': word_count,
-                    'file_size': file_size,
-                    'image_format': image_path.suffix.lower()
-                }
-            }
-            
-        except boto3.exceptions.Boto3Error as e:
-            raise RuntimeError(f"AWS Textract error: {e}") from e
         except Exception as e:
             raise RuntimeError(f"Failed to extract text from image: {e}") from e
     

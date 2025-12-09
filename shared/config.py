@@ -44,7 +44,22 @@ class Settings(BaseSettings):
     bedrock_model_id: str = "us.amazon.nova-lite-v1:0"  # Using Nova Lite inference profile
     bedrock_max_tokens: int = 4096
     
-    # Worker Pool Configuration
+    # Prefect Worker Pool Configuration
+    # Max concurrent document processing flows
+    prefect_max_document_flows: int = 5
+    
+    # Max concurrent file generation flows
+    prefect_max_file_flows: int = 2
+    
+    # Task-level concurrency limits (asyncio semaphores)
+    prefect_textract_workers: int = 3  # AWS Textract API calls
+    prefect_bedrock_workers: int = 5   # AWS Bedrock API calls
+    prefect_file_generation_workers: int = 2  # File summary generation
+    
+    # ThreadPoolExecutor max workers (for blocking I/O operations)
+    prefect_max_threads: int = 2  # Max threads for synchronous LLM calls
+    
+    # Legacy Worker Pool Configuration (deprecated - kept for compatibility)
     # OCR workers (AWS Textract concurrency limit)
     ocr_workers: int = 3
     ocr_poll_interval: int = 5  # seconds
@@ -75,7 +90,11 @@ class Settings(BaseSettings):
     # Prompt Evolution Configuration
     classifier_prompt_max_words: int = 300  # Max words for classifier prompt
     min_documents_for_scoring: int = 1  # Min documents before scoring prompts (set to 1 for testing)
-    prompt_update_threshold: float = 0.05  # Min score improvement to update prompt
+    prompt_update_threshold: float = 999.0  # Min score improvement to update prompt (set to 999 to disable evolution during testing)
+    
+    # AWS API Caching Configuration
+    aws_cache_enabled: bool = True  # Enable request caching to save money during testing
+    aws_cache_max_size: int = 1000  # Maximum number of cached requests
     
     # Logging
     log_level: str = "INFO"
@@ -84,5 +103,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=False
+        case_sensitive=False,
+        extra="ignore"  # Allow extra env vars (like PYTHONUNBUFFERED)
     )

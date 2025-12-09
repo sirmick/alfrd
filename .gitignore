@@ -70,6 +70,9 @@ data/
 *.db
 *.duckdb
 
+# AWS API cache (disk-based request caching)
+.aws_cache/
+
 # Logs
 logs/
 *.log
