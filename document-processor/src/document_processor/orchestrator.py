@@ -48,6 +48,9 @@ class SimpleOrchestrator:
         """Main orchestration loop."""
         await self.initialize()
         
+        # Track all background tasks
+        self.background_tasks = set()
+        
         try:
             iteration = 0
             while True:
@@ -71,11 +74,22 @@ class SimpleOrchestrator:
                     
                     # Check for files created during document processing
                     await self._process_files()
+                    
+                    # Wait for ALL background tasks to complete
+                    if self.background_tasks:
+                        logger.info(f"Waiting for {len(self.background_tasks)} background tasks to complete...")
+                        await asyncio.gather(*self.background_tasks, return_exceptions=True)
+                        logger.info("✅ All background tasks complete")
                     break
                 
                 await asyncio.sleep(10)
         
         finally:
+            # Wait for any remaining background tasks before closing DB
+            if hasattr(self, 'background_tasks') and self.background_tasks:
+                logger.info(f"Waiting for {len(self.background_tasks)} background tasks before shutdown...")
+                await asyncio.gather(*self.background_tasks, return_exceptions=True)
+            
             if self.db:
                 await self.db.close()
             logger.info("Orchestrator shutdown complete")
@@ -180,17 +194,16 @@ class SimpleOrchestrator:
         logger.info(f"Found {len(docs)} pending documents")
         
         # Launch workers with semaphore control
-        tasks = []
         for doc in docs:
             task = asyncio.create_task(
                 self._process_document_with_semaphore(doc['id'])
             )
-            tasks.append(task)
+            # Track background task
+            self.background_tasks.add(task)
+            # Remove from set when done
+            task.add_done_callback(self.background_tasks.discard)
         
         logger.info(f"Queued {len(docs)} document workers")
-        
-        # Don't wait - let them run in background
-        # (run_once mode waits in main loop)
     
     async def _process_document_with_semaphore(self, doc_id: UUID):
         """Process document with flow-level concurrency control."""
@@ -253,12 +266,14 @@ class SimpleOrchestrator:
         
         logger.info(f"Found {len(files)} pending files")
         
-        tasks = []
         for file in files:
             task = asyncio.create_task(
                 self._process_file_with_semaphore(file['id'])
             )
-            tasks.append(task)
+            # Track background task
+            self.background_tasks.add(task)
+            # Remove from set when done
+            task.add_done_callback(self.background_tasks.discard)
         
         logger.info(f"Queued {len(files)} file workers")
     
