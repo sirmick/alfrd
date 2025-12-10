@@ -2,9 +2,9 @@
 
 **Automated Ledger & Filing Research Database**
 
-> **Current Status:** Phase 1C Complete + Prefect 3.x Migration ✅
+> **Current Status:** Phase 1C Complete + Asyncio Orchestrator ✅
 >
-> Prefect 3.x DAG-based pipeline with PostgreSQL database and Ionic React PWA interface.
+> Simple asyncio orchestration with PostgreSQL database and Ionic React PWA interface.
 
 ## Table of Contents
 
@@ -212,23 +212,33 @@ data/inbox/
 
 ### 2. Process Documents
 
-The document processor runs a Prefect 3.x DAG pipeline:
+The document processor runs an asyncio orchestrator:
 
 ```bash
-# Run processor (processes all inbox documents)
+# Run processor (continuous mode - processes all inbox documents)
 ./scripts/start-processor
+
+# Or run once and exit
+python3 document-processor/src/document_processor/main.py --once
+
+# Or process single document
+python3 document-processor/src/document_processor/main.py --doc-id <UUID>
 ```
 
-**Pipeline stages (7 Prefect tasks):**
-1. **OCR Task** - AWS Textract OCR extraction
-2. **Classify Task** - Document type classification (bill/finance/junk/etc)
-3. **Score Classification Task** - Evaluate and improve classifier prompt
-4. **Summarize Task** - Generate type-specific summary
-5. **Score Summary Task** - Evaluate and improve summarizer prompts
-6. **File Task** - Series detection and filing
-7. **Complete Task** - Final status update
+**Pipeline stages:**
+1. **OCR Step** - AWS Textract OCR extraction
+2. **Classify Step** - Document type classification (bill/finance/junk/etc)
+3. **Background: Score Classification** - Evaluate classifier performance
+4. **Summarize Step** - Generate type-specific summary
+5. **Background: Score Summary** - Evaluate summarizer performance
+6. **File Step** - Series detection and filing
+7. **Complete** - Final status update
 
-**Prefect UI:** Access workflow monitoring at http://0.0.0.0:4200
+**Recovery Features:**
+- Automatic retry on failure (max 3 attempts)
+- Periodic stale work detection (every 5 minutes)
+- 30-minute timeout for stuck work
+- Startup recovery scan
 
 ### 3. View Results
 
@@ -308,11 +318,11 @@ psql -U alfrd_user -d alfrd -f api-server/src/api_server/db/schema.sql
 ```bash
 # Start services individually
 ./scripts/start-api         # API Server (port 8000)
-./scripts/start-processor   # Document processor workers
+./scripts/start-processor   # Document processor (asyncio orchestrator)
 ./scripts/start-webui       # Web UI (port 3000)
 
-# Test API
-./scripts/test-api          # Run API tests
+# View processor logs
+# (Output to console when run via ./scripts/start-processor)
 
 # View logs (Docker)
 docker-compose -f docker/docker-compose.yml logs -f
@@ -487,20 +497,34 @@ psql -U alfrd_user -d alfrd -f api-server/src/api_server/db/schema.sql
 
 ## Key Features
 
-### Self-Improving Prompts ✨
+### Self-Improving Prompts ✨ (Currently Disabled for Testing)
 
-- Classifier prompt evolves based on accuracy (max 300 words)
-- Summarizer prompts (per type) evolve based on quality
+- Classifier prompt evolution implemented but disabled (threshold=999.0)
+- Summarizer prompt evolution implemented but disabled (threshold=999.0)
 - LLM can suggest new document types
 - Performance metrics tracked for each prompt version
+- To enable: Set `prompt_update_threshold = 0.05` in config
 
 ### Document Processing Pipeline
 
 ```
-User uploads → OCR → Classify → Score → Summarize → Score → Complete
-                ↓       ↓         ↓         ↓         ↓         ↓
-            Textract  Bedrock  Analyze   Bedrock   Analyze  Database
+User uploads → OCR → Classify → Summarize → File → Complete
+                ↓       ↓          ↓          ↓       ↓
+            Textract  Bedrock   Type-Spec  Series  Status
+                              Summary    Detection Update
+
+Background Tasks (fire-and-forget):
+- Score Classification → Prompt evolution
+- Score Summary → Prompt evolution
 ```
+
+### Recovery & Retry Features
+
+- **Automatic Retry**: Failed documents retried up to 3 times
+- **Stale Work Detection**: Periodic scan every 5 minutes
+- **Timeout Management**: 30-minute timeout for in-progress work
+- **Startup Recovery**: Initial scan on startup to recover from crashes
+- **Error Tracking**: Comprehensive logging and retry count tracking
 
 ### Supported Document Types
 
@@ -547,4 +571,4 @@ Extract deeply nested JSONB data from the `structured_data` field into pandas Da
 
 **🚀 Ready to process documents with AI-powered OCR and classification!**
 
-**Last Updated:** 2025-12-07 (Prefect 3.x Migration Complete)
+**Last Updated:** 2025-12-10 (Asyncio Orchestrator Implementation)

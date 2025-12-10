@@ -1,23 +1,24 @@
 # ALFRD - Current Status & Roadmap
 
-**Last Updated:** 2025-12-07 (Prefect 3.x Migration Complete)
+**Last Updated:** 2025-12-10 (Asyncio Orchestrator Implementation)
 
-**Current Phase:** Phase 2A Complete ✅ + Prefect Migration ✅
+**Current Phase:** Phase 2A Complete ✅ + Asyncio Orchestration ✅
 
 ---
 
 ## What's Working ✅
 
-### Phase 1C: Self-Improving Pipeline (Complete - Migrated to Prefect 3.x)
+### Phase 1C: Self-Improving Pipeline (Complete - Asyncio Orchestrator)
 
-1. **Prefect 3.x DAG-Based Pipeline**
-   - OCR Task → Classify Task → Score Classification Task → Summarize Task → Score Summary Task → File Task → Complete Task
-   - DAG-based workflow with explicit dependencies
-   - Rate limiting for AWS APIs (3 Textract, 5 Bedrock, 2 file-gen)
-   - PostgreSQL advisory locks for prompt evolution
+1. **Asyncio Orchestration**
+   - OCR Step → Classify Step → Summarize Step → File Step → Complete
+   - Background scoring steps (fire-and-forget for prompt evolution)
+   - Semaphore-based concurrency control (3 Textract, 5 Bedrock, 2 file-gen)
+   - Automatic retry mechanism (max 3 attempts per item)
+   - Periodic stale work recovery (every 5 minutes)
+   - 30-minute timeout for stuck work
    - Series-based automatic filing
    - File collection summaries
-   - Prefect UI at http://0.0.0.0:4200 for monitoring
 
 2. **PostgreSQL Database**
    - asyncpg connection pooling (5-20 connections)
@@ -31,12 +32,13 @@
    - Bounding boxes for spatial reasoning
    - ~2-3 seconds per page
 
-4. **Self-Improving Prompts**
-   - Classifier prompt evolves based on accuracy (max 300 words)
-   - Summarizer prompts (per type) evolve based on quality
+4. **Self-Improving Prompts (Currently Disabled for Testing)**
+   - Classifier prompt evolution implemented but disabled (threshold=999.0)
+   - Summarizer prompt evolution implemented but disabled (threshold=999.0)
    - LLM can suggest NEW document types
    - Performance metrics tracked for each version
-   - Min 5 documents before scoring, 0.05 improvement threshold
+   - Min 1 document for testing (production should use 5+)
+   - To enable: Set `prompt_update_threshold = 0.05` in config
 
 5. **Dynamic Classification**
    - 6 default types: bill, finance, school, event, junk, generic
@@ -73,6 +75,15 @@
    - Database CRUD operations
    - Prompt management
    - Full-text search
+   - JSON flattening tests (25+ test cases)
+
+10. **Recovery & Retry Mechanisms**
+    - Startup recovery scan for crashed work
+    - Periodic recovery check every 5 minutes
+    - Automatic retry on failure (max 3 attempts)
+    - 30-minute timeout for stale work detection
+    - Retry count tracking per document/file
+    - Comprehensive error logging
 
 ---
 
@@ -130,35 +141,36 @@
 
 ## Statistics
 
-**Lines of Code:** ~7,500+ lines (after removing ~1,500 lines of old worker infrastructure)
-- Document Processor: ~900 lines (Prefect flows + tasks)
-- Prefect Infrastructure: ~600 lines (3 flows, 7 tasks, locks utility)
-- MCP Server: ~600 lines (tools + Bedrock client + series detection)
+**Lines of Code:** ~6,500+ lines
+- Document Processor: ~800 lines (orchestrator + tasks)
+- Asyncio Orchestration: ~435 lines (SimpleOrchestrator with recovery)
+- MCP Tools: ~600 lines (library functions + Bedrock client)
 - API Server: ~1,216 lines (30+ endpoints)
 - Web UI: ~706 lines (3 fully functional pages)
 - Database Layer: ~1,776 lines (shared/database.py with series/files/tags)
-- Tests: ~850 lines
+- Tests: ~850 lines (PostgreSQL + JSON flattening)
 - Helper Scripts: ~750 lines
-- Database Schema: ~666 lines (PostgreSQL with series, files, tags)
+- Database Schema: ~693 lines (PostgreSQL with series, files, tags)
 
-**Test Coverage:** 20/20 tests passing (100% database module)
+**Test Coverage:** 20/20 PostgreSQL tests + 25+ JSON flattening tests passing
 
 **Test Results:**
 - ✅ OCR: 98.47% confidence (AWS Textract)
-- ✅ Classification: 95% confidence as "bill"
-- ✅ Prompt Evolution: Classifier v1→v2 (score: 0.85), Bill Summarizer v1→v2 (score: 0.85)
-- ✅ Full Pipeline: pending → ocr_in_progress → classified → summarized → filed → completed
+- ✅ Classification: 95% confidence (Bedrock LLM)
+- ✅ Prompt Evolution: Implemented but disabled for testing
+- ✅ Full Pipeline: pending → ocr_completed → classified → summarized → filed → completed
 - ✅ Series Detection: Automatic entity and series_type identification
 - ✅ File Generation: Collection summaries with aggregated content
-- ✅ Prefect Integration: DAG execution with rate limiting and advisory locks
+- ✅ Recovery: Automatic retry and stale work detection
+- ✅ JSON Flattening: 4 array strategies with pandas integration
 
 ---
 
 ## Architecture Decision Record
 
-### PostgreSQL Migration (2025-11-30) ✅
+### PostgreSQL with Recovery Mechanisms (2025-11-30) ✅
 
-**Decision:** Use PostgreSQL 15+ for production scalability
+**Decision:** Use PostgreSQL 15+ with comprehensive recovery
 
 **Rationale:**
 - Production-ready scalability
@@ -167,6 +179,14 @@
 - Full-text search with GIN indexes
 - JSONB for flexible structured data
 - Unix socket connections for performance
+- Database-driven state machine enables crash recovery
+
+**Recovery Features:**
+- Periodic stale work detection (every 5 minutes)
+- Automatic retry with max attempts tracking
+- 30-minute timeout for stuck work
+- Startup recovery scan
+- Comprehensive error logging
 
 **Impact:**
 - New dependency: PostgreSQL 15+
@@ -204,22 +224,30 @@ inbox/doc-folder/
 - AWS dependency (but already using Bedrock)
 - Requires AWS credentials
 
-### Prefect 3.x Workflow Orchestration (2025-12) ✅
+### Asyncio Orchestration with Recovery (2025-12) ✅
 
-**Decision:** Migrate from worker polling to Prefect DAG-based workflows
+**Decision:** Use simple asyncio orchestrator with comprehensive recovery
 
 **Rationale:**
-- Explicit task dependencies (no polling loops)
-- Built-in rate limiting for AWS APIs
-- PostgreSQL advisory locks for prompt evolution serialization
-- Better observability via Prefect UI
-- Crash-resistant with automatic retries
-- Horizontal scaling via Prefect deployment
+- No external dependencies (simpler deployment)
+- Semaphore-based concurrency control
+- Database-driven state machine (crash-resistant)
+- Automatic retry and recovery mechanisms
+- Easy to understand and debug
+- Sufficient for single-instance deployment
 
-**Configuration:** `shared/config.py` + task decorators
-- Rate limits: 3 Textract, 5 Bedrock, 2 file-gen
-- Advisory locks: Per-document-type for prompt evolution
-- Orchestrator: Monitors DB every 5 seconds for new documents
+**Recovery Implementation:**
+- `recover_stale_work()` - Detects and resets stuck items
+- `_periodic_recovery()` - Background task runs every 5 minutes
+- Retry counting with max attempts (3 per document/file)
+- 30-minute timeout for in-progress states
+- Startup recovery scan
+
+**Configuration:** `shared/config.py`
+- Rate limits: 3 Textract, 5 Bedrock, 2 file-gen (via semaphores)
+- Recovery interval: 5 minutes
+- Stale timeout: 30 minutes
+- Max retries: 3 per document/file
 
 ### MCP Architecture Rule (2024-11) ✅
 
@@ -241,8 +269,10 @@ inbox/doc-folder/
 1. **PostgreSQL Required** - Must install and run PostgreSQL 15+
 2. **Database Initialization** - Run `./scripts/create-alfrd-db` before first use
 3. **Unix Socket Connection** - Development uses Unix sockets, Docker uses TCP
-4. **Minimum Scoring Threshold** - Set to 1 for testing; production should use 5+
-5. **MCP as Library** - Currently imported directly, not separate server process
+4. **Prompt Evolution Disabled** - `prompt_update_threshold = 999.0` for testing
+5. **Minimum Scoring Threshold** - Set to 1 for testing; production should use 5+
+6. **MCP as Library** - Functions imported directly, not separate server process
+7. **Recovery Configuration** - 5-minute interval, 30-minute timeout, 3 max retries
 
 ---
 
@@ -320,20 +350,20 @@ esec/
 
 ---
 
-## Recent Changes (2025-12-07)
+## Recent Changes (2025-12-10)
 
-### Prefect 3.x Migration (Phase 2A+)
-- Migrated from worker polling to Prefect 3.x DAG-based workflows
-- Created 7 Prefect tasks replacing worker classes
-- Implemented 3 flows: document_flow, file_flow, orchestrator
-- Added PostgreSQL advisory locks for per-document-type serialization
-- Implemented rate limiting: 3 Textract, 5 Bedrock, 2 file-gen
-- Deleted ~1,500 lines of old worker infrastructure
-- Fixed multiple bugs during testing (imports, status transitions, file generation)
-- Prefect UI available at http://0.0.0.0:4200
-- Updated all documentation to reflect Prefect architecture
-- Deleted migration planning documents (WORKFLOW_REFACTORING_PLAN.md, etc.)
+### Asyncio Orchestrator Implementation
+- Implemented SimpleOrchestrator with semaphore-based concurrency
+- Added comprehensive retry and recovery mechanisms
+- Periodic stale work detection (every 5 minutes)
+- Automatic retry on failure (max 3 attempts)
+- 30-minute timeout for stuck work
+- Startup recovery scan for crashed work
+- Background scoring steps (fire-and-forget)
+- MCP tools as library functions (no separate server)
+- Prompt evolution implemented but disabled for testing (threshold=999.0)
+- Updated all documentation to reflect actual implementation
 
 ---
 
-**Status:** Phase 2A complete + Prefect migration! DAG-based pipeline with rate limiting, advisory locks, and Prefect UI monitoring. Next: Complete PWA integration and comprehensive testing.
+**Status:** Phase 2A complete! Asyncio orchestrator with automatic retry/recovery, semaphore concurrency control, and comprehensive error handling. Next: Complete PWA integration and comprehensive testing.

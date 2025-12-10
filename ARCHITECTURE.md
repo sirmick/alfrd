@@ -2,7 +2,7 @@
 
 **Automated Ledger & Filing Research Database**
 
-**Current Status:** Phase 1C Complete + PostgreSQL Migration (2025-11-30)
+**Current Status:** Phase 1C Complete + PostgreSQL Migration (2025-12-10)
 
 ---
 
@@ -13,18 +13,20 @@ Personal document management system with AI-powered processing and self-improvin
 **Tech Stack:**
 - **Database:** PostgreSQL 15+ with full-text search (asyncpg connection pooling)
 - **OCR:** AWS Textract (95%+ accuracy, $1.50/1000 pages)
-- **LLM:** AWS Bedrock (Nova Lite for classification, Claude Sonnet 4 for scoring)
+- **LLM:** AWS Bedrock (Nova Lite for classification)
 - **API:** FastAPI with asyncio
 - **UI:** Ionic React PWA for mobile document capture
+- **Orchestration:** Simple asyncio with semaphore-based concurrency
 - **Deployment:** Docker with supervisord
 
 **Key Features:**
-- 7-worker self-improving pipeline with prompt evolution
-- State-machine-driven processing (crash-resistant)
+- Asyncio-based processing pipeline with retry/recovery
+- State-machine-driven document flow (crash-resistant)
 - Series-based filing with hybrid tag approach
 - Dynamic document type classification
 - Real-time full-text search
 - Block-level OCR data preservation for spatial reasoning
+- Automatic stale work recovery (every 5 minutes)
 
 ---
 
@@ -46,15 +48,17 @@ Personal document management system with AI-powered processing and self-improvin
 │                          └────────┬────────┘                 │
 │                                   │                           │
 │  ┌───────────────────────────────▼────────────────────────┐ │
-│  │    Document Processor (Prefect 3.x DAG Pipeline)       │ │
+│  │    Document Processor (Asyncio Orchestrator)           │ │
 │  │                                                          │ │
-│  │  OCR Task → Classify Task → Score Classification Task  │ │
-│  │     ↓              ↓                    ↓               │ │
-│  │  AWS Textract   AWS Bedrock      Prompt Evolution      │ │
+│  │  OCR Step → Classify Step → Summarize Step → File Step│ │
+│  │     ↓            ↓              ↓              ↓        │ │
+│  │  Textract    Bedrock LLM   Type-Specific   Series      │ │
+│  │              Classification  Summary      Detection     │ │
 │  │                                                          │ │
-│  │  Summarize Task → Score Summary Task → File Task       │ │
-│  │     ↓                    ↓                  ↓           │ │
-│  │  Type-Specific    Prompt Evolution   Series Detection  │ │
+│  │  Background: Score Classification + Score Summary       │ │
+│  │              (Fire-and-forget for prompt evolution)     │ │
+│  │                                                          │ │
+│  │  Recovery: Periodic scan for stuck/failed work         │ │
 │  └──────────────────────────────────────────────────────────┘ │
 │                                                               │
 └─────────────────────────────────────────────────────────────┘
@@ -116,19 +120,28 @@ User uploads folder → pending
 - `classification_suggestions` - LLM-suggested types for review
 - Full schema: [`api-server/src/api_server/db/schema.sql`](api-server/src/api_server/db/schema.sql)
 
-### 2. Prefect 3.x Workflow Orchestration
+### 2. Asyncio Orchestration with Semaphores
 
 **Why:**
-- DAG-based pipeline with explicit task dependencies
-- Built-in rate limiting for AWS API concurrency (3 Textract, 5 Bedrock, 2 file-gen)
-- PostgreSQL advisory locks for per-document-type serialization (prompt evolution)
-- Crash-resistant with automatic retries
-- Observable via Prefect UI (http://0.0.0.0:4200)
+- Simple, lightweight orchestration without external dependencies
+- Semaphore-based concurrency control for AWS API rate limiting
+- Crash-resistant with retry logic and stale work recovery
 - All state in database (not in-memory)
+- Easy to understand and debug
 
-**Configuration:** See [`shared/config.py`](shared/config.py) and task decorators
+**Configuration:** See [`shared/config.py`](shared/config.py)
+- `prefect_textract_workers: int = 3` - Max concurrent Textract calls
+- `prefect_bedrock_workers: int = 5` - Max concurrent Bedrock calls
+- `prefect_max_document_flows: int = 5` - Max documents processing simultaneously
+- `prefect_max_file_flows: int = 2` - Max files generating simultaneously
 
-### 3. Self-Improving Prompts
+**Recovery Mechanism:**
+- Periodic scan every 5 minutes for stuck work
+- Automatic retry with exponential backoff
+- Max 3 retries per document/file
+- 30-minute timeout for stale work detection
+
+### 3. Self-Improving Prompts (Currently Disabled for Testing)
 
 **Architecture:**
 - **Classifier prompt:** Single prompt (max 300 words), evolves based on accuracy
@@ -137,8 +150,13 @@ User uploads folder → pending
 - **Versioning:** All prompts tracked with version numbers and performance scores
 - **Thresholds:** Min 5 documents before scoring, 0.05 score improvement to update
 
+**Current Status:**
+- Implemented but disabled for testing: `prompt_update_threshold = 999.0`
+- Set to `1` minimum documents for testing (production should use 5+)
+- To enable: Set `prompt_update_threshold = 0.05` in config
+
 **Why:**
-- System learns from mistakes automatically
+- System can learn from mistakes automatically
 - No hardcoded handlers - all prompt-driven
 - Generic architecture works for any document type
 - LLM can suggest NEW document types not in initial list
@@ -171,16 +189,19 @@ User uploads folder → pending
 }
 ```
 
-### 5. MCP Architecture Rule ⚠️
+### 5. MCP Tools as Library Functions
 
-**All document processors MUST:**
-- ✅ Call MCP tools only (e.g., `score_classification()`, `summarize_dynamic()`)
-- ❌ Never call LLM clients directly (e.g., `bedrock_client.invoke_model()`)
+**MCP Implementation:**
+- MCP tools are Python functions in `mcp-server/src/mcp_server/tools/`
+- No separate server process required
+- Functions imported and called directly by orchestrator
+- `mcp-server/main.py` explicitly states: "No separate MCP server process needed"
 
 **Why:**
-- Consistent prompt management and versioning
-- Makes future MCP server transition seamless
-- All LLM interactions logged and trackable
+- Simpler deployment - no additional service to manage
+- Direct function calls - lower latency
+- Easier to debug and test
+- Future: Can be exposed as MCP server if needed
 
 ---
 
@@ -352,13 +373,14 @@ Full OpenAPI docs: `http://localhost:8000/docs`
 
 ---
 
-## Current Status (2025-12-06)
+## Current Status (2025-12-10)
 
 ### ✅ Completed (Phase 1C + 2A + 2B)
-- PostgreSQL database with asyncpg
-- 7-worker self-improving pipeline (OCR → Classify → Score → Summarize → Score → File → Generate)
+- PostgreSQL database with asyncpg connection pooling
+- Asyncio orchestrator with semaphore-based concurrency control
+- Automatic retry and stale work recovery mechanisms
 - AWS Textract OCR with block preservation
-- Dynamic document type classification with prompt evolution
+- Dynamic document type classification
 - Series-based filing with hybrid tag approach
 - File generation with collection summaries
 - API server with 30+ endpoints
@@ -462,4 +484,4 @@ All LLM interactions use database-stored prompts that evolve based on performanc
 
 ---
 
-**Last Updated:** 2025-12-05
+**Last Updated:** 2025-12-10
