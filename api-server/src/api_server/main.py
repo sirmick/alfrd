@@ -737,6 +737,7 @@ async def flatten_file_data(
         documents = await database.get_file_documents(file_uuid)
         
         if not documents:
+            logger.info(f"File {file_id}: No documents found for flattening")
             return {
                 "columns": [],
                 "rows": [],
@@ -757,6 +758,8 @@ async def flatten_file_data(
         columns = df.columns.tolist()
         rows = df.to_dict(orient='records')
         
+        logger.info(f"File {file_id}: Flattened {len(documents)} documents to {len(rows)} rows × {len(columns)} columns")
+        
         # Convert datetime objects to ISO strings for JSON serialization
         for row in rows:
             for key, value in row.items():
@@ -765,12 +768,13 @@ async def flatten_file_data(
                 elif value is None or (isinstance(value, float) and str(value) == 'nan'):
                     row[key] = None
         
-        return {
+        result = {
             "columns": columns,
             "rows": rows,
             "count": len(rows),
             "array_strategy": array_strategy
         }
+        return result
     
     except HTTPException:
         raise

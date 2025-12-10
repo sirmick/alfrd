@@ -28,10 +28,17 @@ CREATE TABLE IF NOT EXISTS documents (
         'scoring_summary',         -- Scoring summarizer performance
         'filed',                   -- NEW: Added to appropriate file(s)
         'completed',               -- All processing done
-        'failed'                   -- Error at any stage
+        'failed',                  -- Error at any stage
+        'permanently_failed'       -- Max retries exceeded
     )),
     processed_at TIMESTAMP WITH TIME ZONE,
     error_message TEXT,
+    
+    -- Recovery and retry tracking
+    processing_started_at TIMESTAMP WITH TIME ZONE,
+    retry_count INT DEFAULT 0,
+    max_retries INT DEFAULT 3,
+    last_error TEXT,
     
     -- Classification (new simplified system)
     document_type VARCHAR,  -- Dynamic types: 'junk', 'bill', 'finance', 'school', 'event', etc.
@@ -314,6 +321,12 @@ CREATE TABLE IF NOT EXISTS files (
         'failed'             -- Generation failed
     )),
     
+    -- Recovery and retry tracking
+    processing_started_at TIMESTAMP WITH TIME ZONE,
+    retry_count INT DEFAULT 0,
+    max_retries INT DEFAULT 3,
+    last_error TEXT,
+    
     -- Timestamps
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -335,6 +348,15 @@ CREATE TABLE IF NOT EXISTS file_documents (
 CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
 CREATE INDEX IF NOT EXISTS idx_files_user ON files(user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_files_source ON files(file_source);
+
+-- Indexes for stale work detection
+CREATE INDEX IF NOT EXISTS idx_documents_stale_check
+    ON documents(status, updated_at)
+    WHERE status IN ('ocr_in_progress', 'summarizing');
+
+CREATE INDEX IF NOT EXISTS idx_files_stale_check
+    ON files(status, updated_at)
+    WHERE status IN ('generating', 'regenerating');
 
 CREATE INDEX IF NOT EXISTS idx_file_documents_file ON file_documents(file_id);
 CREATE INDEX IF NOT EXISTS idx_file_documents_document ON file_documents(document_id);

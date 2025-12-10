@@ -92,6 +92,12 @@ class Settings(BaseSettings):
     min_documents_for_scoring: int = 1  # Min documents before scoring prompts (set to 1 for testing)
     prompt_update_threshold: float = 999.0  # Min score improvement to update prompt (set to 999 to disable evolution during testing)
     
+    # Recovery Configuration
+    stale_timeout_minutes: int = 30  # How long before considering work stale/stuck
+    recovery_check_interval_minutes: int = 5  # How often to run recovery check (periodic heartbeat)
+    max_document_retries: int = 3  # Max retry attempts before marking permanently_failed
+    max_file_retries: int = 3  # Max retry attempts for file generation
+    
     # AWS API Caching Configuration
     aws_cache_enabled: bool = True  # Enable request caching to save money during testing
     aws_cache_max_size: int = 1000  # Maximum number of cached requests

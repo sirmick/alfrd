@@ -1132,24 +1132,32 @@ class AlfrdDatabase:
         """
         await self.initialize()
         
+        import logging
+        logger = logging.getLogger(__name__)
+        
         async with self.pool.acquire() as conn:
-            # Get file's tag IDs from file_tags junction table
+            # Get file's tag IDs and names from file_tags junction table
             tag_rows = await conn.fetch("""
-                SELECT tag_id FROM file_tags WHERE file_id = $1
+                SELECT ft.tag_id, t.tag_name, t.tag_normalized
+                FROM file_tags ft
+                INNER JOIN tags t ON ft.tag_id = t.id
+                WHERE ft.file_id = $1
             """, file_id)
             
             if not tag_rows:
+                logger.info(f"File {file_id}: No tags found, returning empty list")
                 return []
             
             tag_ids = [row['tag_id'] for row in tag_rows]
+            tag_names = [row['tag_name'] for row in tag_rows]
+            logger.info(f"File {file_id}: Querying documents with tags {tag_names}")
             
-            # Get documents that have ALL of these tags
-            # Count how many of the file's tags each document has
+            # Get documents that have ALL of these tags AND status='filed' OR 'completed'
             rows = await conn.fetch("""
                 SELECT DISTINCT d.id, d.filename, d.created_at, d.document_type,
-                       d.summary, d.structured_data
+                       d.summary, d.structured_data, d.status
                 FROM documents d
-                WHERE d.status = 'completed'
+                WHERE d.status IN ('filed', 'completed')
                   AND (
                     SELECT COUNT(DISTINCT dt.tag_id)
                     FROM document_tags dt
@@ -1158,6 +1166,8 @@ class AlfrdDatabase:
                   ) = $2
                 ORDER BY d.{order_by}
             """.format(order_by=order_by), tag_ids, len(tag_ids))
+            
+            logger.info(f"File {file_id}: Found {len(rows)} documents")
             
             # Parse JSONB fields and fetch tags for each document
             results = []
@@ -1226,7 +1236,7 @@ class AlfrdDatabase:
         if isinstance(tag_id, str):
             tag_id = UUIDType(tag_id)
         
-        logger.info(f"Adding tag '{tag_name}' to document {document_id} (tag_id={tag_id})")
+        logger.info(f"Adding tag '{tag_name}' to document {document_id}")
         
         # Add to document_tags junction table
         async with self.pool.acquire() as conn:
@@ -1240,7 +1250,8 @@ class AlfrdDatabase:
         await self.increment_tag_usage(self.normalize_tag(tag_name))
         
         # Note: File invalidation is handled automatically by database trigger
-        # See schema.sql: document_tags_invalidate_files trigger
+        # The trigger marks files with this tag as 'outdated' for regeneration
+        logger.info(f"Tag '{tag_name}' added - files with this tag will be marked for regeneration")
     
     async def update_file(self, file_id: UUID, **fields):
         """Update file fields.
@@ -1987,3 +1998,178 @@ class AlfrdDatabase:
             final_tags.append(tag_record['tag_name'])
         
         return final_tags
+    
+    # ==========================================
+    # RECOVERY OPERATIONS
+    # ==========================================
+    
+    async def get_stale_documents(
+        self,
+        timeout_minutes: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Find documents stuck in processing states.
+        
+        A document is considered stale if:
+        - Status is an in-progress state (ocr_in_progress, summarizing)
+        - updated_at is older than timeout_minutes
+        - retry_count < max_retries (not permanently failed)
+        
+        Args:
+            timeout_minutes: How many minutes before considering work stale
+            
+        Returns:
+            List of stale document dicts
+        """
+        await self.initialize()
+        
+        from datetime import timedelta
+        
+        # States that indicate active processing
+        stale_statuses = ['ocr_in_progress', 'summarizing']
+        timeout = utc_now() - timedelta(minutes=timeout_minutes)
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, filename, status, updated_at, retry_count, max_retries,
+                       processing_started_at, last_error
+                FROM documents
+                WHERE status = ANY($1::text[])
+                  AND updated_at < $2
+                  AND retry_count < COALESCE(max_retries, 3)
+                ORDER BY updated_at ASC
+            """, stale_statuses, timeout)
+            
+            return [dict(row) for row in rows]
+    
+    async def get_stale_files(
+        self,
+        timeout_minutes: int = 30
+    ) -> List[Dict[str, Any]]:
+        """Find files stuck in generating state.
+        
+        Args:
+            timeout_minutes: How many minutes before considering work stale
+            
+        Returns:
+            List of stale file dicts
+        """
+        await self.initialize()
+        
+        from datetime import timedelta
+        
+        timeout = utc_now() - timedelta(minutes=timeout_minutes)
+        
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT id, status, updated_at, retry_count, max_retries,
+                       processing_started_at, last_error
+                FROM files
+                WHERE status IN ('generating', 'regenerating')
+                  AND updated_at < $1
+                  AND retry_count < COALESCE(max_retries, 3)
+                ORDER BY updated_at ASC
+            """, timeout)
+            
+            return [dict(row) for row in rows]
+    
+    async def reset_document_for_retry(self, doc_id: UUID, error_message: str = None):
+        """Reset document to retry state with incremented counter.
+        
+        This method:
+        1. Gets current document state
+        2. Increments retry counter
+        3. Resets to appropriate state based on current status
+        4. Marks as permanently_failed if max retries exceeded
+        
+        Args:
+            doc_id: Document UUID
+            error_message: Optional error message to log
+        """
+        await self.initialize()
+        
+        doc = await self.get_document(doc_id)
+        if not doc:
+            return
+        
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Map current status to reset state (using string literals)
+        reset_state_map = {
+            'ocr_in_progress': 'pending',
+            'summarizing': 'classified',
+        }
+        
+        new_status = reset_state_map.get(doc['status'], 'pending')
+        new_retry_count = (doc.get('retry_count') or 0) + 1
+        max_retries = doc.get('max_retries') or 3
+        
+        # Check if max retries exceeded
+        if new_retry_count >= max_retries:
+            logger.error(
+                f"🚫 Document {doc_id} exceeded max retries ({max_retries}) - "
+                f"marking permanently_failed"
+            )
+            await self.update_document(
+                doc_id,
+                status='permanently_failed',
+                retry_count=new_retry_count,
+                last_error=error_message or f'Max retries ({max_retries}) exceeded',
+                processing_started_at=None
+            )
+        else:
+            logger.warning(
+                f"♻️ Resetting document {doc_id} from {doc['status']} to {new_status} "
+                f"(retry {new_retry_count}/{max_retries})"
+            )
+            await self.update_document(
+                doc_id,
+                status=new_status,
+                retry_count=new_retry_count,
+                last_error=error_message,
+                processing_started_at=None
+            )
+    
+    async def reset_file_for_retry(self, file_id: UUID, error_message: str = None):
+        """Reset file to retry state with incremented counter.
+        
+        Args:
+            file_id: File UUID
+            error_message: Optional error message to log
+        """
+        await self.initialize()
+        
+        file = await self.get_file(file_id)
+        if not file:
+            return
+        
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        new_retry_count = (file.get('retry_count') or 0) + 1
+        max_retries = file.get('max_retries') or 3
+        
+        if new_retry_count >= max_retries:
+            logger.error(
+                f"🚫 File {file_id} exceeded max retries ({max_retries}) - "
+                f"marking failed"
+            )
+            await self.update_file(
+                file_id,
+                status='failed',
+                retry_count=new_retry_count,
+                last_error=error_message or f'Max retries ({max_retries}) exceeded',
+                processing_started_at=None
+            )
+        else:
+            logger.warning(
+                f"♻️ Resetting file {file_id} from {file.get('status')} to pending "
+                f"(retry {new_retry_count}/{max_retries})"
+            )
+            await self.update_file(
+                file_id,
+                status='pending',
+                retry_count=new_retry_count,
+                last_error=error_message,
+                processing_started_at=None
+            )

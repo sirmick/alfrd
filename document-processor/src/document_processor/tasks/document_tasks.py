@@ -47,7 +47,11 @@ async def _ocr_task_impl(doc_id: UUID, db: AlfrdDatabase) -> str:
     if not doc:
         raise ValueError(f"Document {doc_id} not found")
     
-    await db.update_document(doc_id, status=DocumentStatus.OCR_IN_PROGRESS)
+    await db.update_document(
+        doc_id,
+        status=DocumentStatus.OCR_IN_PROGRESS,
+        processing_started_at=utc_now()
+    )
     
     logger.info(f"OCR processing document {doc_id}")
     
@@ -690,13 +694,20 @@ async def file_step(
         # Create series tag
         entity_slug = series_data['entity'].lower().replace(' ', '-').replace('&', 'and')
         series_tag = f"series:{entity_slug}"
+        
+        logger.info(f"Adding series tag '{series_tag}' to document {doc_id}")
         await db.add_tag_to_document(doc_id, series_tag, created_by='llm')
         
-        # Create file
-        file = await db.find_or_create_file(uuid4(), tags=[series_tag])
-        
+        # Update document status to 'filed' BEFORE creating file
+        # This ensures get_file_documents() can find it immediately
         await db.update_document(doc_id, status=DocumentStatus.FILED)
-        logger.info(f"Filed {doc_id} into series {series['id']}, file {file['id']}")
+        logger.info(f"Document {doc_id} status updated to 'filed'")
+        
+        # Create file based on series tag (file query will now find this document)
+        file = await db.find_or_create_file(uuid4(), tags=[series_tag])
+        logger.info(f"File {file['id']} created/found for tag '{series_tag}'")
+        
+        logger.info(f"Filed {doc_id} into series {series['id']}, file {file['id']}, with tag '{series_tag}'")
         
         return file['id']
         
@@ -734,14 +745,27 @@ async def _generate_file_summary_task_impl(
     logger.info(f"Generating file summary for {file_id}")
     
     try:
+        # Mark as generating with timestamp
+        from shared.database import utc_now
+        await db.update_file(
+            file_id,
+            status='generating',
+            processing_started_at=utc_now()
+        )
+        
         # Get file and documents
         logger.info(f"Fetching file {file_id}...")
         file = await db.get_file(file_id)
-        logger.info(f"File fetched: {file.get('tags')}")
         
-        logger.info(f"Fetching documents for file {file_id}...")
+        if not file:
+            logger.error(f"File {file_id} not found")
+            await db.update_file(file_id, status='failed')
+            raise ValueError(f"File {file_id} not found")
+        
+        logger.info(f"File fetched: tags={file.get('tags')}, status={file.get('status')}")
+        
         documents = await db.get_file_documents(file_id, order_by="created_at DESC")
-        logger.info(f"Documents fetched: {len(documents)} documents")
+        logger.info(f"File {file_id}: Generating summary for {len(documents)} documents")
         
         if not documents:
             logger.warning(f"No documents for file {file_id}, marking as generated with empty summary")
@@ -768,17 +792,24 @@ async def _generate_file_summary_task_impl(
             })
         
         # Generate file summary
+        logger.info(f"Calling summarize_file with {len(content_parts)} documents, tags={file['tags']}")
         loop = asyncio.get_event_loop()
-        summary = await loop.run_in_executor(
-            None,
-            summarize_file,
-            content_parts,  # documents
-            None,  # file_type (deprecated)
-            file['tags'],  # tags
-            "",  # prompt (empty string for default)
-            bedrock_client,
-            None  # flattened_table (will be auto-generated)
-        )
+        
+        try:
+            summary = await loop.run_in_executor(
+                None,
+                summarize_file,
+                content_parts,  # documents
+                None,  # file_type (deprecated)
+                file.get('tags', []),  # tags (ensure it's a list)
+                "",  # prompt (empty string for default)
+                bedrock_client,
+                None  # flattened_table (will be auto-generated)
+            )
+            logger.info(f"File summary generated successfully: {len(summary.get('summary', ''))} chars")
+        except Exception as e:
+            logger.error(f"Error in summarize_file: {e}", exc_info=True)
+            raise
         
         # Save
         await db.update_file(
@@ -789,7 +820,7 @@ async def _generate_file_summary_task_impl(
             last_generated_at=datetime.now(timezone.utc)
         )
         
-        logger.info(f"Generated summary for file {file_id}")
+        logger.info(f"File {file_id}: Summary generated ({len(summary.get('summary', ''))} chars)")
         return summary['summary']
         
     except Exception as e:

@@ -84,12 +84,22 @@ def summarize_file(
             'model': str             # Model used
         }
     """
+    # Validate inputs
+    if not documents:
+        raise ValueError("No documents provided for summarization")
+    
+    if not isinstance(documents, list):
+        raise TypeError(f"documents must be a list, got {type(documents)}")
+    
     # Generate flattened table if not provided
     if flattened_table is None:
         flattened_table = _flatten_documents_to_table(documents)
     
     # Build context for LLM
     tags = tags or []
+    if not isinstance(tags, list):
+        tags = [str(tags)]
+    
     context = f"Tags: {', '.join(tags)}\n"
     context += f"Total Documents: {len(documents)}\n\n"
     

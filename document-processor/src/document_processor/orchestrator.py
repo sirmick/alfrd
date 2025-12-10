@@ -30,6 +30,10 @@ class SimpleOrchestrator:
         # Flow-level semaphores
         self.doc_flow_sem = asyncio.Semaphore(settings.prefect_max_document_flows)
         self.file_flow_sem = asyncio.Semaphore(settings.prefect_max_file_flows)
+        
+        # Recovery configuration
+        self.recovery_interval_minutes = settings.recovery_check_interval_minutes
+        self.stale_timeout_minutes = settings.stale_timeout_minutes
     
     async def initialize(self):
         """Initialize database and Bedrock client."""
@@ -45,11 +49,20 @@ class SimpleOrchestrator:
         logger.info("✅ Orchestrator initialized")
     
     async def run(self, run_once: bool = False):
-        """Main orchestration loop."""
+        """Main orchestration loop with periodic recovery."""
         await self.initialize()
+        
+        # Initial recovery on startup
+        logger.info("🔍 Running startup recovery check...")
+        recovered = await self.recover_stale_work()
+        if recovered > 0:
+            logger.warning(f"♻️ Startup recovery: {recovered} stuck items recovered")
         
         # Track all background tasks
         self.background_tasks = set()
+        
+        # Start periodic recovery task
+        recovery_task = asyncio.create_task(self._periodic_recovery())
         
         try:
             iteration = 0
@@ -85,6 +98,13 @@ class SimpleOrchestrator:
                 await asyncio.sleep(10)
         
         finally:
+            # Cancel recovery task
+            recovery_task.cancel()
+            try:
+                await recovery_task
+            except asyncio.CancelledError:
+                pass
+            
             # Wait for any remaining background tasks before closing DB
             if hasattr(self, 'background_tasks') and self.background_tasks:
                 logger.info(f"Waiting for {len(self.background_tasks)} background tasks before shutdown...")
@@ -182,16 +202,22 @@ class SimpleOrchestrator:
         return new_count
     
     async def _process_documents(self):
-        """Launch document processing workers."""
-        docs = await self.db.get_documents_by_status(
-            DocumentStatus.PENDING,
-            limit=self.settings.prefect_max_document_flows * 2
-        )
+        """Launch document processing workers for ALL processable states."""
+        # Get documents in any non-terminal state
+        statuses_to_process = ['pending', 'ocr_completed', 'classified', 'summarized', 'filed']
+        
+        docs = []
+        for status in statuses_to_process:
+            batch = await self.db.get_documents_by_status(
+                status,
+                limit=self.settings.prefect_max_document_flows * 2
+            )
+            docs.extend(batch)
         
         if not docs:
             return
         
-        logger.info(f"Found {len(docs)} pending documents")
+        logger.info(f"Found {len(docs)} processable documents (states: {statuses_to_process})")
         
         # Launch workers with semaphore control
         for doc in docs:
@@ -211,7 +237,7 @@ class SimpleOrchestrator:
             await self._process_document(doc_id)
     
     async def _process_document(self, doc_id: UUID):
-        """Complete document processing pipeline."""
+        """Resume document processing pipeline from current state."""
         from document_processor.tasks.document_tasks import (
             ocr_step, classify_step, score_classification_step,
             summarize_step, score_summary_step, file_step
@@ -219,36 +245,59 @@ class SimpleOrchestrator:
         
         try:
             doc = await self.db.get_document(doc_id)
-            logger.info(f"📄 Processing: {doc['filename']} ({doc_id})")
+            status = doc['status']
+            logger.info(f"📄 Processing: {doc['filename']} ({doc_id}) from status={status}")
             
-            # Step 1: OCR
-            extracted_text = await ocr_step(doc_id, self.db)
+            extracted_text = None
+            classification = None
             
-            # Step 2: Classification
-            classification = await classify_step(
-                doc_id, extracted_text, self.db, self.bedrock
-            )
+            # Step 1: OCR (if needed)
+            if status == 'pending':
+                extracted_text = await ocr_step(doc_id, self.db)
+                doc = await self.db.get_document(doc_id)  # Refresh
+                status = doc['status']
+            else:
+                extracted_text = doc.get('extracted_text')
             
-            # Step 3: Score classification (background)
-            asyncio.create_task(
-                score_classification_step(doc_id, classification, self.db, self.bedrock)
-            )
+            # Step 2: Classification (if needed)
+            if status in ['pending', 'ocr_completed']:
+                classification = await classify_step(
+                    doc_id, extracted_text, self.db, self.bedrock
+                )
+                
+                # Step 3: Score classification (background)
+                asyncio.create_task(
+                    score_classification_step(doc_id, classification, self.db, self.bedrock)
+                )
+                
+                doc = await self.db.get_document(doc_id)  # Refresh
+                status = doc['status']
             
-            # Step 4: Summarization
-            summary = await summarize_step(doc_id, self.db, self.bedrock)
+            # Step 4: Summarization (if needed)
+            if status in ['pending', 'ocr_completed', 'classified', 'summarizing']:
+                summary = await summarize_step(doc_id, self.db, self.bedrock)
+                
+                # Step 5: Score summary (background)
+                asyncio.create_task(
+                    score_summary_step(doc_id, self.db, self.bedrock)
+                )
+                
+                doc = await self.db.get_document(doc_id)  # Refresh
+                status = doc['status']
             
-            # Step 5: Score summary (background)
-            asyncio.create_task(
-                score_summary_step(doc_id, self.db, self.bedrock)
-            )
+            # Step 6: File into series (if needed)
+            if status in ['pending', 'ocr_completed', 'classified', 'summarized']:
+                file_id = await file_step(doc_id, self.db, self.bedrock)
+                logger.info(f"✅ Document {doc_id} filed into {file_id}")
+                doc = await self.db.get_document(doc_id)  # Refresh
+                status = doc['status']
             
-            # Step 6: File into series
-            file_id = await file_step(doc_id, self.db, self.bedrock)
+            # Step 7: Mark completed (runs for filed or any state that reaches here)
+            if status == 'filed':
+                await self.db.update_document(doc_id, status=DocumentStatus.COMPLETED)
+                logger.info(f"✅ Document {doc_id} marked as completed")
             
-            # Step 7: Mark completed
-            await self.db.update_document(doc_id, status=DocumentStatus.COMPLETED)
-            
-            logger.info(f"✅ Document {doc_id} complete (filed into {file_id})")
+            logger.info(f"✅ Document {doc_id} complete")
             
         except Exception as e:
             logger.error(f"❌ Document {doc_id} failed: {e}", exc_info=True)
@@ -300,3 +349,87 @@ class SimpleOrchestrator:
         except Exception as e:
             logger.error(f"❌ File {file_id} failed: {e}", exc_info=True)
             # Error already handled in task function
+    
+    async def _periodic_recovery(self):
+        """Background task that runs recovery check every X minutes."""
+        while True:
+            try:
+                await asyncio.sleep(self.recovery_interval_minutes * 60)
+                
+                logger.info(f"🔍 Running periodic recovery check (every {self.recovery_interval_minutes} min)...")
+                recovered = await self.recover_stale_work()
+                
+                if recovered > 0:
+                    logger.warning(
+                        f"♻️ Periodic recovery: {recovered} stuck items recovered and queued for retry"
+                    )
+                else:
+                    logger.debug("✅ No stuck work found")
+                    
+            except asyncio.CancelledError:
+                logger.info("Recovery task cancelled")
+                raise
+            except Exception as e:
+                logger.error(f"❌ Recovery check failed: {e}", exc_info=True)
+    
+    async def recover_stale_work(self) -> int:
+        """Reset stuck documents and files to retry state.
+        
+        Returns:
+            Number of items recovered
+        """
+        recovered_count = 0
+        
+        # Recover stale documents
+        stale_docs = await self.db.get_stale_documents(timeout_minutes=self.stale_timeout_minutes)
+        
+        for doc in stale_docs:
+            # Calculate how long it's been stuck
+            from datetime import datetime, timezone
+            stuck_minutes = (datetime.now(timezone.utc) - doc['updated_at']).total_seconds() / 60
+            
+            logger.warning({
+                "event": "stale_document_detected",
+                "entity_type": "document",
+                "document_id": str(doc['id']),
+                "filename": doc['filename'],
+                "status": doc['status'],
+                "stuck_duration_minutes": round(stuck_minutes, 1),
+                "retry_count": doc['retry_count'],
+                "max_retries": doc['max_retries'],
+                "timeout_threshold_minutes": self.stale_timeout_minutes,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            
+            await self.db.reset_document_for_retry(
+                doc['id'],
+                error_message=f"Recovered from stale {doc['status']} state (stuck for {stuck_minutes:.1f} min)"
+            )
+            recovered_count += 1
+        
+        # Recover stale files
+        stale_files = await self.db.get_stale_files(timeout_minutes=self.stale_timeout_minutes)
+        
+        for file in stale_files:
+            from datetime import datetime, timezone
+            stuck_minutes = (datetime.now(timezone.utc) - file['updated_at']).total_seconds() / 60
+            
+            logger.warning({
+                "event": "stale_file_detected",
+                "entity_type": "file",
+                "file_id": str(file['id']),
+                "status": file['status'],
+                "stuck_duration_minutes": round(stuck_minutes, 1),
+                "retry_count": file['retry_count'],
+                "max_retries": file.get('max_retries', 3),
+                "timeout_threshold_minutes": self.stale_timeout_minutes,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            
+            await self.db.reset_file_for_retry(
+                file['id'],
+                error_message=f"Recovered from stale {file['status']} state (stuck for {stuck_minutes:.1f} min)"
+            )
+            recovered_count += 1
+        
+        return recovered_count
