@@ -2,9 +2,9 @@
 
 **Automated Ledger & Filing Research Database**
 
-> **Current Status:** Phase 1C Complete + Asyncio Orchestrator ✅
+> **Current Status:** Phase 1C Complete + Series Schema Stability
 >
-> Simple asyncio orchestration with PostgreSQL database and Ionic React PWA interface.
+> Simple asyncio orchestration with PostgreSQL database, series-specific extraction, and Ionic React PWA interface.
 
 ## Table of Contents
 
@@ -14,6 +14,7 @@
 - [Starting Services](#starting-services)
 - [Processing Documents](#processing-documents)
 - [Using the Web UI](#using-the-web-ui)
+- [Debugging with Events](#debugging-with-events)
 - [Command Reference](#command-reference)
 - [Project Structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
@@ -87,10 +88,12 @@ AWS_REGION=us-east-1
 DATABASE_URL=postgresql://alfrd_user@/alfrd?host=/var/run/postgresql
 POSTGRES_PASSWORD=alfrd_dev_password
 
+# Prompt Evolution (default: 0.05 - enabled)
+PROMPT_UPDATE_THRESHOLD=0.05
+
 # Optional: Customize paths
 INBOX_PATH=./data/inbox
 DOCUMENTS_PATH=./data/documents
-SUMMARIES_PATH=./data/summaries
 ```
 
 ---
@@ -232,7 +235,9 @@ python3 document-processor/src/document_processor/main.py --doc-id <UUID>
 4. **Summarize Step** - Generate type-specific summary
 5. **Background: Score Summary** - Evaluate summarizer performance
 6. **File Step** - Series detection and filing
-7. **Complete** - Final status update
+7. **Series Summarize Step** - Entity-specific extraction with schema enforcement
+8. **Background: Score Series** - Evaluate and evolve series prompt
+9. **Complete** - Final status update
 
 **Recovery Features:**
 - Automatic retry on failure (max 3 attempts)
@@ -272,10 +277,10 @@ data/documents/2024/11/
 
 ### Features
 
-- **📸 Camera Capture** - Take photos of documents
-- **📋 Document List** - View all processed documents
-- **🔍 Document Details** - See OCR text, summaries, and classifications
-- **📊 Status Tracking** - Real-time processing status
+- **Camera Capture** - Take photos of documents
+- **Document List** - View all processed documents
+- **Document Details** - See OCR text, summaries, and classifications
+- **Status Tracking** - Real-time processing status
 
 ### Workflow
 
@@ -284,6 +289,60 @@ data/documents/2024/11/
 3. **Capture or Upload**: Use camera or file upload
 4. **Monitor**: Watch document process through pipeline
 5. **Review**: View extracted data and summaries
+
+---
+
+## Debugging with Events
+
+ALFRD includes a comprehensive event logging system for debugging:
+
+### View Events
+
+```bash
+# View events for any entity (auto-detects document/file/series)
+./scripts/view-events <uuid>
+
+# View events for a specific document
+./scripts/view-events --document <uuid>
+
+# View events for a series
+./scripts/view-events --series <uuid>
+
+# Filter by category
+./scripts/view-events <uuid> --category llm_request
+./scripts/view-events <uuid> --category processing
+./scripts/view-events <uuid> --category error
+
+# Show full prompt/response text
+./scripts/view-events <uuid> --full
+
+# JSON output for scripting
+./scripts/view-events <uuid> --json
+
+# Limit results
+./scripts/view-events <uuid> --limit 100
+```
+
+### Event Categories
+
+- **state_transition** - Document status changes (pending → classified)
+- **llm_request** - LLM API calls with prompt/response
+- **processing** - Processing milestones (regeneration_started, lock_acquired)
+- **error** - Failures and exceptions
+- **user_action** - Manual interventions
+
+### Example: Debug Series Prompt Creation
+
+```bash
+# Find the series
+./scripts/view-events --series <series-uuid> --category processing
+
+# Look for these events:
+# - lock_requested: Task wants the series_prompt lock
+# - lock_acquired: Lock granted
+# - prompt_created: New series prompt created
+# - lock_released: Lock freed
+```
 
 ---
 
@@ -321,9 +380,6 @@ psql -U alfrd_user -d alfrd -f api-server/src/api_server/db/schema.sql
 ./scripts/start-processor   # Document processor (asyncio orchestrator)
 ./scripts/start-webui       # Web UI (port 3000)
 
-# View processor logs
-# (Output to console when run via ./scripts/start-processor)
-
 # View logs (Docker)
 docker-compose -f docker/docker-compose.yml logs -f
 ```
@@ -340,8 +396,27 @@ docker-compose -f docker/docker-compose.yml logs -f
 # View summarizer prompts only
 ./scripts/view-prompts --type summarizer
 
+# View series prompts
+./scripts/view-prompts --type series_summarizer
+
 # Include archived versions
 ./scripts/view-prompts --archived
+```
+
+### Event Logging
+
+```bash
+# View events for any entity
+./scripts/view-events <uuid>
+
+# Filter by category
+./scripts/view-events <uuid> --category llm_request
+
+# Show full LLM prompt/response text
+./scripts/view-events <uuid> --full
+
+# JSON output
+./scripts/view-events <uuid> --json
 ```
 
 ### Testing
@@ -370,21 +445,20 @@ esec/
 │   └── tests/
 ├── document-processor/      # Document processing workers
 │   ├── src/document_processor/
-│   │   ├── main.py         # Prefect orchestrator entry point
-│   │   ├── flows/
-│   │   │   ├── document_flow.py    # Main processing DAG
-│   │   │   ├── file_flow.py        # File generation flow
-│   │   │   └── orchestrator.py     # DB monitoring orchestrator
+│   │   ├── main.py         # Asyncio orchestrator entry point
+│   │   ├── orchestrator.py # SimpleOrchestrator with recovery
 │   │   ├── tasks/
-│   │   │   └── document_tasks.py   # All 7 Prefect tasks
+│   │   │   ├── document_tasks.py      # All processing tasks
+│   │   │   └── series_regeneration.py # Series regeneration worker
 │   │   ├── utils/
-│   │   │   └── locks.py            # PostgreSQL advisory locks
+│   │   │   └── locks.py    # PostgreSQL advisory locks
 │   │   └── extractors/
-│   │       └── aws_textract.py       # Textract integration
+│   │       └── aws_textract.py  # Textract integration
 │   └── tests/
 ├── mcp-server/              # LLM integration tools
 │   └── src/mcp_server/
 │       ├── tools/           # MCP tool implementations
+│       │   └── summarize_series.py  # Series-specific extraction
 │       └── llm/bedrock.py   # AWS Bedrock client
 ├── web-ui/                  # Ionic React PWA
 │   ├── src/
@@ -397,22 +471,18 @@ esec/
 ├── shared/                  # Shared utilities
 │   ├── config.py           # Configuration
 │   ├── database.py         # PostgreSQL client
-│   ├── json_flattener.py   # JSONB to DataFrame conversion
-│   ├── constants.py        # Shared constants
+│   ├── event_logger.py     # Event logging utilities
 │   ├── types.py            # Type definitions
 │   └── tests/
-│       ├── test_database.py
-│       └── test_json_flattener.py    # 25+ flattening tests
+│       └── test_database.py
 ├── scripts/                 # CLI utilities
 │   ├── add-document        # Add documents to inbox
 │   ├── view-document       # View processed documents
 │   ├── view-prompts        # View prompt evolution
-│   ├── analyze-file-data   # Extract & analyze JSONB data
+│   ├── view-events         # Event log viewer
 │   ├── start-api           # Start API server
 │   ├── start-processor     # Start workers
 │   └── start-webui         # Start web UI
-├── docs/
-│   └── JSON_FLATTENING.md  # Data extraction guide
 ├── docker/                  # Docker configuration
 │   ├── Dockerfile
 │   ├── docker-compose.yml
@@ -420,7 +490,6 @@ esec/
 └── data/                    # Runtime data (not in git)
     ├── inbox/              # Document input folders
     ├── documents/          # Processed documents
-    ├── summaries/          # Generated summaries
     └── postgres/           # PostgreSQL data (Docker)
 ```
 
@@ -493,29 +562,56 @@ API_PORT=8001 ./scripts/start-api
 psql -U alfrd_user -d alfrd -f api-server/src/api_server/db/schema.sql
 ```
 
+### Debugging Processing Issues
+
+```bash
+# View events for a document to see what happened
+./scripts/view-events <document-uuid>
+
+# Check for errors
+./scripts/view-events <document-uuid> --category error
+
+# See LLM calls with full prompts
+./scripts/view-events <document-uuid> --category llm_request --full
+```
+
 ---
 
 ## Key Features
 
-### Self-Improving Prompts ✨ (Currently Disabled for Testing)
+### Series-Specific Extraction (Schema Consistency)
 
-- Classifier prompt evolution implemented but disabled (threshold=999.0)
-- Summarizer prompt evolution implemented but disabled (threshold=999.0)
+ALFRD ensures all documents in a series have identical field names:
+
+- **First document** creates the series prompt from generic extraction
+- **Subsequent documents** use the SAME prompt for consistent field names
+- **PostgreSQL advisory locks** prevent race conditions
+- **Automatic regeneration** when series prompt improves
+
+This eliminates schema drift:
+- Before: `total_amount` vs `amount_due` vs `premium_amount`
+- After: All documents use `total_amount`
+
+### Self-Improving Prompts
+
+- Classifier prompt evolution based on accuracy
+- Summarizer prompt evolution based on extraction quality
+- Series prompt evolution with automatic regeneration
 - LLM can suggest new document types
-- Performance metrics tracked for each prompt version
-- To enable: Set `prompt_update_threshold = 0.05` in config
+- Configure threshold via `PROMPT_UPDATE_THRESHOLD` (default: 0.05)
 
 ### Document Processing Pipeline
 
 ```
-User uploads → OCR → Classify → Summarize → File → Complete
-                ↓       ↓          ↓          ↓       ↓
-            Textract  Bedrock   Type-Spec  Series  Status
-                              Summary    Detection Update
+User uploads → OCR → Classify → Summarize → File → Series Summarize → Complete
+                ↓       ↓          ↓          ↓            ↓             ↓
+            Textract  Bedrock   Type-Spec  Series      Entity-Spec    Status
+                              Summary    Detection    Extraction     Update
 
 Background Tasks (fire-and-forget):
 - Score Classification → Prompt evolution
 - Score Summary → Prompt evolution
+- Score Series → Series prompt evolution + regeneration
 ```
 
 ### Recovery & Retry Features
@@ -539,36 +635,13 @@ LLM can suggest additional types dynamically!
 
 ---
 
-## Data Analysis Features
-
-### JSON Flattening
-
-Extract deeply nested JSONB data from the `structured_data` field into pandas DataFrames for analysis:
-
-**Array Handling Strategies:**
-- `flatten` - Expand arrays into separate rows (default)
-- `json` - Keep arrays as JSON strings
-- `first` - Take first element of each array
-- `count` - Count array elements
-
-**Use Cases:**
-- Export structured data to CSV for spreadsheet analysis
-- Time series analysis of recurring bills
-- Aggregate statistics across document collections
-- Data exploration and structure discovery
-
-**See Documentation:** [`docs/JSON_FLATTENING.md`](docs/JSON_FLATTENING.md)
-
----
-
 ## Next Steps
 
 - **See [`ARCHITECTURE.md`](ARCHITECTURE.md)** - System design and architecture
 - **See [`STATUS.md`](STATUS.md)** - Current development status
-- **See [`docs/JSON_FLATTENING.md`](docs/JSON_FLATTENING.md)** - Data extraction guide
 
 ---
 
-**🚀 Ready to process documents with AI-powered OCR and classification!**
+**Ready to process documents with AI-powered OCR, classification, and schema-consistent extraction!**
 
-**Last Updated:** 2025-12-10 (Asyncio Orchestrator Implementation)
+**Last Updated:** 2025-12-12 (Series Schema Stability)

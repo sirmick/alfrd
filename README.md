@@ -14,6 +14,7 @@
 - **Process folders** with multiple documents (multi-page bills, receipts, etc.)
 - **Classify via MCP** using LLM-powered document type detection (AWS Bedrock)
 - **Extract structured data** (vendor, amount, due date, line items) from bills automatically
+- **Organize into series** with schema-consistent extraction across recurring documents
 - **Store in PostgreSQL** with full-text search capability
 - **Preserve for LLMs** with combined text + block-level structure for spatial reasoning
 
@@ -87,6 +88,10 @@ User adds document → Folder created in inbox (PENDING)
                      ↓
        File Step → Series detection & tagging (FILED)
                      ↓
+Series Summarize → Series-specific extraction (SERIES_SUMMARIZED)
+                     ↓
+                Background: Score Series Extraction
+                     ↓
          Complete → Updates status (COMPLETED)
 ```
 
@@ -96,12 +101,22 @@ User adds document → Folder created in inbox (PENDING)
 - Periodic recovery scan for stuck work (every 5 minutes)
 - 30-minute timeout for stale work detection
 - Scoring steps run in background (fire-and-forget)
+- PostgreSQL advisory locks prevent race conditions
+- Comprehensive event logging for debugging
 
-**Self-Improving Features (Currently Disabled for Testing):**
+**Series-Specific Extraction (Schema Consistency):**
+- Each document series gets its own extraction prompt
+- All documents in a series have identical field names
+- Eliminates schema drift (e.g., `total_amount` vs `amount_due`)
+- Enables clean data tables and aggregation
+- Prompts evolve together (all documents regenerated)
+
+**Self-Improving Features:**
 - Classifier prompt evolution based on classification accuracy
 - Summarizer prompt evolution based on extraction quality
+- Series prompt evolution with automatic regeneration
 - LLM can suggest new document types
-- To enable: Set `prompt_update_threshold = 0.05` in config (currently 999.0)
+- Configure via `PROMPT_UPDATE_THRESHOLD` in .env (default: 0.05)
 
 ### LLM-Optimized Output
 
@@ -126,9 +141,13 @@ User adds document → Folder created in inbox (PENDING)
 
 ## Key Features
 
-### ✅ Phase 1C Complete - Self-Improving Prompt Architecture
+### ✅ Phase 1C Complete + Series Schema Stability (2025-12-12)
 
-- **🧠 Self-improving prompts** - Implemented but disabled for testing (prompt_update_threshold=999.0)
+- **🧠 Self-improving prompts** - Classifier, summarizer, and series prompts evolve based on quality
+- **📋 Series-specific extraction** - Each document series gets consistent field names
+- **🔒 PostgreSQL advisory locks** - Prevent race conditions in concurrent processing
+- **📊 Event logging system** - Comprehensive debugging with `./scripts/view-events`
+- **♻️ Series regeneration** - All documents updated when series prompt improves
 - **🔄 Dynamic classification** - LLM can suggest new document types
 - **📊 Generic workflow** - No hardcoded handlers, all DB-driven
 - **🎯 Scorer workers** - Evaluate classifier/summarizer performance (background)
@@ -140,6 +159,7 @@ User adds document → Folder created in inbox (PENDING)
 - **Classify step** - DB-driven classification with Bedrock LLM
 - **Summarize step** - Type-specific DB-driven summarization
 - **File step** - Automatic series detection and filing
+- **Series summarize step** - Entity-specific extraction with schema enforcement
 - **Complete step** - Final status updates
 - **Folder-based document input** with `meta.json` metadata
 - **Block-level data preservation** (PAGE, LINE, WORD with bounding boxes)
@@ -184,26 +204,28 @@ alfrd/
 │   ├── src/document_processor/
 │   │   ├── main.py           # Entry point
 │   │   ├── orchestrator.py   # SimpleOrchestrator with recovery
-│   │   ├── detector.py       # File type detection
 │   │   ├── tasks/
-│   │   │   └── document_tasks.py  # Processing steps
+│   │   │   ├── document_tasks.py     # Processing steps
+│   │   │   └── series_regeneration.py # Series regeneration worker
+│   │   ├── utils/
+│   │   │   └── locks.py      # PostgreSQL advisory locks
 │   │   └── extractors/
 │   │       └── aws_textract.py    # AWS Textract OCR with blocks
 │   └── tests/                # Pytest test suite
 ├── api-server/               # REST API (30+ endpoints)
 ├── mcp-server/               # LLM tools (library functions)
+│   └── src/mcp_server/tools/
+│       ├── summarize_series.py  # Series-specific extraction
+│       └── ...
 ├── scripts/
 │   ├── create-alfrd-db      # Database initialization (REQUIRED!)
 │   ├── add-document         # Add documents to inbox
-│   ├── analyze-file-data    # JSON flattening and data analysis
+│   ├── view-events          # Event log viewer
 │   └── start-processor      # Process documents wrapper
 ├── shared/                   # Shared configuration and types
 │   ├── database.py          # PostgreSQL client
-│   ├── json_flattener.py    # JSON to DataFrame conversion
+│   ├── event_logger.py      # Event logging utilities
 │   └── tests/
-│       └── test_json_flattener.py
-├── docs/
-│   └── JSON_FLATTENING.md   # JSON flattening documentation
 └── data/                    # Runtime data (not in git)
     ├── inbox/              # Document folders (input)
     ├── processed/          # Processed folders (archived)
@@ -419,28 +441,29 @@ No wrapper scripts or environment setup needed!
 ### Database Schema
 
 Key tables:
-- `documents` - Core document metadata and extracted text
-- `prompts` - Evolving classifier and summarizer prompts (versioned)
-- `classification_suggestions` - LLM-suggested new document types
+- `documents` - Core document metadata, extracted text, and structured data
+- `series` - Document series with active_prompt_id and regeneration_pending
+- `prompts` - Evolving classifier, summarizer, and series prompts (versioned)
+- `events` - Comprehensive event log for debugging
 - `document_types` - Dynamic list of known document types
-- `summaries` - Generated summaries by period
-- `processing_events` - Event log for pipeline
-- `analytics` - Pre-computed metrics
+- `classification_suggestions` - LLM-suggested new document types
 
 See `api-server/src/api_server/db/schema.sql` for complete schema.
 
 ## Statistics
 
-- **Lines of Code**: ~6,500+ lines (orchestrator + tasks + MCP tools + API + Web UI + flattening)
+- **Lines of Code**: ~8,000+ lines (orchestrator + tasks + MCP tools + API + Web UI + events)
 - **Test Coverage**: 20/20 PostgreSQL tests passing + integration tests
 - **OCR Accuracy**: 95%+ with AWS Textract
 - **Processing Speed**: ~2-3 seconds per page
 - **Orchestration**: Simple asyncio with semaphore-based concurrency control
 - **Recovery**: Automatic retry (3 attempts) + periodic stale work detection (5 min)
 - **MCP Integration**: Bedrock with Amazon Nova Lite (library functions, not server)
-- **Prompt Evolution**: Implemented but disabled for testing (threshold=999.0)
+- **Prompt Evolution**: Enabled with threshold=0.05 (configure via PROMPT_UPDATE_THRESHOLD)
+- **Series Prompts**: One per series for schema-consistent extraction
 - **Document Types**: 6 default types (bill, finance, school, event, junk, generic) + unlimited LLM-suggested types
-- **API Endpoints**: 30+ endpoints (health, documents, files, series, tags, prompts, flattening)
+- **API Endpoints**: 30+ endpoints (health, documents, files, series, tags, prompts, events)
+- **Event Logging**: Full audit trail with `./scripts/view-events`
 - **Web UI**: Ionic React PWA with data visualization
   - **CapturePage** (166 lines) - Camera capture, photo preview, upload
   - **DocumentsPage** (192 lines) - Document list with API integration

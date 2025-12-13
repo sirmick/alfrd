@@ -2,13 +2,13 @@
 
 **Automated Ledger & Filing Research Database**
 
-**Current Status:** Phase 1C Complete + PostgreSQL Migration (2025-12-10)
+**Current Status:** Phase 1C Complete + Series Schema Stability (2025-12-12)
 
 ---
 
 ## Executive Summary
 
-Personal document management system with AI-powered processing and self-improving classification.
+Personal document management system with AI-powered processing, self-improving classification, and series-specific extraction for schema consistency.
 
 **Tech Stack:**
 - **Database:** PostgreSQL 15+ with full-text search (asyncpg connection pooling)
@@ -16,16 +16,18 @@ Personal document management system with AI-powered processing and self-improvin
 - **LLM:** AWS Bedrock (Nova Lite for classification)
 - **API:** FastAPI with asyncio
 - **UI:** Ionic React PWA for mobile document capture
-- **Orchestration:** Simple asyncio with semaphore-based concurrency
+- **Orchestration:** Asyncio with semaphore-based concurrency
 - **Deployment:** Docker with supervisord
 
 **Key Features:**
 - Asyncio-based processing pipeline with retry/recovery
 - State-machine-driven document flow (crash-resistant)
+- **Series-specific prompts with schema consistency**
+- **PostgreSQL advisory locks for race condition prevention**
+- **Event logging for debugging and audit trails**
 - Series-based filing with hybrid tag approach
 - Dynamic document type classification
 - Real-time full-text search
-- Block-level OCR data preservation for spatial reasoning
 - Automatic stale work recovery (every 5 minutes)
 
 ---
@@ -45,18 +47,26 @@ Personal document management system with AI-powered processing and self-improvin
 │                          ┌────────▼────────┐                 │
 │                          │  PostgreSQL 15  │                 │
 │                          │  + Full-Text    │                 │
+│                          │  + Advisory     │                 │
+│                          │    Locks        │                 │
 │                          └────────┬────────┘                 │
 │                                   │                           │
 │  ┌───────────────────────────────▼────────────────────────┐ │
 │  │    Document Processor (Asyncio Orchestrator)           │ │
 │  │                                                          │ │
-│  │  OCR Step → Classify Step → Summarize Step → File Step│ │
-│  │     ↓            ↓              ↓              ↓        │ │
-│  │  Textract    Bedrock LLM   Type-Specific   Series      │ │
-│  │              Classification  Summary      Detection     │ │
+│  │  OCR → Classify → Summarize → File → Series Extract   │ │
+│  │    ↓       ↓          ↓         ↓          ↓           │ │
+│  │  Textract  Bedrock  Generic   Series    Series        │ │
+│  │            LLM      Summary   Detect    Prompt        │ │
 │  │                                                          │ │
-│  │  Background: Score Classification + Score Summary       │ │
-│  │              (Fire-and-forget for prompt evolution)     │ │
+│  │  Background Tasks:                                       │ │
+│  │  - Score Classification (prompt evolution)              │ │
+│  │  - Score Summary (prompt evolution)                     │ │
+│  │  - Score Series Extraction (prompt evolution)           │ │
+│  │                                                          │ │
+│  │  Series Regeneration:                                    │ │
+│  │  - Triggered when series prompt improves                │ │
+│  │  - Updates all documents in series                      │ │
 │  │                                                          │ │
 │  │  Recovery: Periodic scan for stuck/failed work         │ │
 │  └──────────────────────────────────────────────────────────┘ │
@@ -66,38 +76,242 @@ Personal document management system with AI-powered processing and self-improvin
 
 ---
 
+## Document & Series Hierarchy
+
+ALFRD organizes documents into a hierarchy:
+
+```
+Documents → Series → Files
+    │          │        │
+    │          │        └─ Aggregated summaries by tag
+    │          └─ Recurring collections (e.g., "PG&E Monthly Bills")
+    └─ Individual scanned documents
+```
+
+### Series Concept
+
+A **Series** represents recurring documents from the same entity:
+- "Pacific Gas & Electric" monthly utility bills
+- "State Farm" quarterly insurance statements
+- "Bay Area Properties LLC" monthly rent receipts
+
+Each series has:
+- **Entity**: The organization (e.g., "Pacific Gas & Electric")
+- **Series Type**: The document pattern (e.g., "monthly_utility_bill")
+- **Active Prompt**: Series-specific extraction prompt
+- **Schema**: Consistent field names across all documents
+
+### Why Series Matter
+
+**Problem Solved:** Schema Drift
+
+Without series prompts, documents processed at different times would have inconsistent field names:
+- Document 1: `usage_kwh: 450`
+- Document 2: `electric_usage: 475`
+- Document 3: `total_kwh: 420`
+
+**Solution:** Each series gets ONE prompt that extracts with consistent field names:
+- All documents: `usage_kwh: 450, 475, 420...`
+
+This enables clean data tables, aggregation, and financial tracking.
+
+---
+
 ## Processing Pipeline
 
-### State Machine Flow
+### Complete Document Flow
 
 ```
 User uploads folder → pending
          ↓
-    OCR Task (AWS Textract) → ocr_in_progress → ocr_completed
+    OCR Step (AWS Textract) → ocr_completed
          ↓
-    Classify Task (Bedrock + DB prompts) → classified
+    Classify Step (Bedrock + DB prompts) → classified
          ↓
-    Score Classification Task (evaluate & evolve) → scored_classification
+    [Background] Score Classification → scored_classification
          ↓
-    Summarize Task (type-specific) → summarized
+    Summarize Step (Generic, type-specific) → summarized
          ↓
-    Score Summary Task (evaluate & evolve) → scored_summary
+    [Background] Score Summary → scored_summary
          ↓
-    File Task (series detection & tagging) → filed
+    File Step (Series detection & tagging) → filed
+         ↓
+    Series Summarize Step (Series-specific extraction) → series_summarized
+         ↓
+    [Background] Score Series Extraction
          ↓
     Complete Task (final status update) → completed
 ```
 
 ### Document Status Values
+
 - `pending` - Folder detected in inbox
-- `ocr_completed` - Text extracted
-- `classified` - Type determined (utility_bill/insurance/education/etc.)
+- `ocr_completed` - Text extracted via AWS Textract
+- `classified` - Document type determined (utility_bill/insurance/etc.)
 - `scored_classification` - Classifier performance evaluated
-- `summarized` - Type-specific summary generated
+- `summarized` - Generic summary generated
 - `scored_summary` - Summarizer performance evaluated
 - `filed` - Added to series and tagged
-- `completed` - All processing done (file summaries generated)
+- `series_summarized` - Series-specific extraction complete
+- `completed` - All processing done
 - `failed` - Error at any stage
+
+---
+
+## Series-Specific Prompt System
+
+### The Schema Consistency Problem
+
+Generic prompts evolve over time based on scoring feedback. This causes **schema drift**:
+
+```
+Month 1: Prompt extracts "total_amount"
+Month 2: Evolved prompt extracts "amount_due"
+Month 3: Further evolved to "total_due"
+```
+
+Result: 12 monthly bills with 12 different field names = unusable data tables.
+
+### The Solution: Series Prompts
+
+Each series gets its own prompt that:
+1. Is created from the first document in the series
+2. Enforces strict field naming
+3. Is used for ALL subsequent documents in that series
+4. Evolves as a unit (all documents regenerated together)
+
+### Series Prompt Workflow
+
+**First Document in Series:**
+```
+1. Document processed through generic pipeline
+2. File step detects/creates series "PG&E Monthly Bills"
+3. Series has NO active_prompt_id
+4. WITH LOCK: Create series prompt from generic extraction
+5. Store prompt with schema definition
+6. Link prompt to series (active_prompt_id)
+7. Extract document with series prompt
+8. Store in structured_data field
+```
+
+**Subsequent Documents:**
+```
+1. Document processed through generic pipeline
+2. File step assigns to existing series
+3. Series HAS active_prompt_id
+4. Get existing series prompt
+5. Extract document with SAME prompt
+6. All documents have IDENTICAL field names!
+```
+
+### PostgreSQL Advisory Locks
+
+**Problem:** Multiple concurrent documents could create duplicate series prompts.
+
+**Solution:** PostgreSQL advisory locks ensure only ONE task creates the prompt:
+
+```python
+async with series_prompt_lock(db, series_id):
+    # Double-check after acquiring lock
+    series = await db.get_series(series_id)
+    if not series.get('active_prompt_id'):
+        # We're first - create the prompt
+        prompt = await create_series_prompt(...)
+        await db.update_series(series_id, active_prompt_id=prompt['id'])
+```
+
+**Lock Types:**
+- `document_type_lock`: Prevents concurrent processing of same document type
+- `series_prompt_lock`: Prevents concurrent series prompt creation
+
+**Event Logging:**
+All lock operations are logged:
+- `lock_requested` - Task wants the lock
+- `lock_acquired` - Lock granted
+- `lock_released` - Lock freed
+- `lock_timeout` - Failed to acquire within timeout
+
+### Series Regeneration
+
+When a series prompt improves beyond threshold:
+
+1. New prompt version created
+2. Old prompt deactivated
+3. Series marked with `regeneration_pending = TRUE`
+4. After all documents processed:
+   - Find all documents in series
+   - Skip those already using latest prompt
+   - Re-extract with new prompt (NO scoring - avoids infinite loop)
+   - Mark regeneration complete
+
+**Key Design:** Regeneration uses a dedicated function that bypasses scoring to prevent infinite loops.
+
+---
+
+## Event Logging System
+
+### Purpose
+
+Comprehensive logging for:
+- Debugging processing issues
+- Audit trail for LLM calls
+- Performance monitoring
+- Lock contention analysis
+
+### Event Categories
+
+| Category | Description | Examples |
+|----------|-------------|----------|
+| `state_transition` | Document status changes | pending → ocr_completed |
+| `llm_request` | LLM API calls | classify, summarize, score |
+| `processing` | Processing milestones | ocr_complete, regeneration_started |
+| `error` | Failures and exceptions | extraction_failed, lock_timeout |
+| `user_action` | Manual interventions | manual_reprocess |
+
+### Event Fields
+
+```sql
+CREATE TABLE events (
+    id UUID PRIMARY KEY,
+    event_category VARCHAR NOT NULL,
+    event_type VARCHAR NOT NULL,
+    document_id UUID,           -- Which document
+    file_id UUID,               -- Which file
+    series_id UUID,             -- Which series
+    task_name VARCHAR,          -- Which task
+    old_status VARCHAR,         -- For state transitions
+    new_status VARCHAR,
+    llm_model VARCHAR,          -- For LLM requests
+    llm_prompt_text TEXT,
+    llm_response_text TEXT,
+    llm_request_tokens INTEGER,
+    llm_response_tokens INTEGER,
+    llm_latency_ms INTEGER,
+    llm_cost_usd FLOAT,
+    error_message TEXT,         -- For errors
+    details JSONB,              -- Additional context
+    created_at TIMESTAMP
+);
+```
+
+### Viewing Events
+
+```bash
+# View events for a document
+./scripts/view-events <document-uuid>
+
+# View events for a series
+./scripts/view-events --series <series-uuid>
+
+# Filter by category
+./scripts/view-events <uuid> --category llm_request
+
+# Show full prompt/response text
+./scripts/view-events <uuid> --full
+
+# JSON output
+./scripts/view-events <uuid> --json
+```
 
 ---
 
@@ -108,16 +322,16 @@ User uploads folder → pending
 **Why:**
 - Production-ready scalability
 - asyncpg connection pooling (5-20 connections)
-- Full-text search with GIN indexes on TSVECTOR
-- JSONB for flexible structured data with indexing
-- Better multi-user support
+- Full-text search with GIN indexes
+- JSONB for flexible structured data
+- **Advisory locks for distributed coordination**
 - Unix socket connections for local dev performance
 
 **Schema Highlights:**
-- `documents` - Core metadata + extracted text + JSONB structured data
-- `prompts` - Versioned classifier/summarizer prompts
-- `document_types` - Dynamic type registry (LLM can add new types)
-- `classification_suggestions` - LLM-suggested types for review
+- `documents` - Core metadata + extracted text + structured data
+- `series` - Document series with active_prompt_id
+- `prompts` - Versioned prompts including series_summarizer type
+- `events` - Comprehensive event log
 - Full schema: [`api-server/src/api_server/db/schema.sql`](api-server/src/api_server/db/schema.sql)
 
 ### 2. Asyncio Orchestration with Semaphores
@@ -132,8 +346,7 @@ User uploads folder → pending
 **Configuration:** See [`shared/config.py`](shared/config.py)
 - `prefect_textract_workers: int = 3` - Max concurrent Textract calls
 - `prefect_bedrock_workers: int = 5` - Max concurrent Bedrock calls
-- `prefect_max_document_flows: int = 5` - Max documents processing simultaneously
-- `prefect_max_file_flows: int = 2` - Max files generating simultaneously
+- `prefect_max_document_flows: int = 5` - Max documents processing
 
 **Recovery Mechanism:**
 - Periodic scan every 5 minutes for stuck work
@@ -141,67 +354,50 @@ User uploads folder → pending
 - Max 3 retries per document/file
 - 30-minute timeout for stale work detection
 
-### 3. Self-Improving Prompts (Currently Disabled for Testing)
+### 3. Self-Improving Prompts
 
 **Architecture:**
-- **Classifier prompt:** Single prompt (max 300 words), evolves based on accuracy
-- **Summarizer prompts:** One per document type (6 defaults: bill, finance, school, event, junk, generic)
-- **Scorer workers:** LLM evaluates its own performance, suggests prompt improvements
-- **Versioning:** All prompts tracked with version numbers and performance scores
-- **Thresholds:** Min 5 documents before scoring, 0.05 score improvement to update
+- **Classifier prompt:** Single prompt that evolves based on accuracy
+- **Summarizer prompts:** One per document type (generic extraction)
+- **Series prompts:** One per series (schema-consistent extraction)
+- **Scorer workers:** LLM evaluates its own performance
 
-**Current Status:**
-- Implemented but disabled for testing: `prompt_update_threshold = 999.0`
-- Set to `1` minimum documents for testing (production should use 5+)
-- To enable: Set `prompt_update_threshold = 0.05` in config
+**Thresholds:**
+- Min 1 document for testing (production should use 5+)
+- Score improvement of 0.05 to trigger evolution
+- Series prompts: evolution triggers regeneration of entire series
 
-**Why:**
-- System can learn from mistakes automatically
-- No hardcoded handlers - all prompt-driven
-- Generic architecture works for any document type
-- LLM can suggest NEW document types not in initial list
+### 4. Dual Extraction Strategy
 
-### 4. AWS Textract OCR
+**Why Two Extractions:**
+- `structured_data_generic`: Generic prompt extraction (type-specific)
+- `structured_data`: Series prompt extraction (entity-specific, consistent schema)
+
+**Benefits:**
+- Generic extraction works for all documents
+- Series extraction ensures consistency within series
+- Fallback if series extraction fails
+- Can compare quality between approaches
+
+### 5. AWS Textract OCR
 
 **Why:**
 - 95%+ accuracy (better than Claude Vision for documents)
 - Block-level preservation (PAGE, LINE, WORD with bounding boxes)
-- Spatial reasoning: LLM sees text layout for better understanding
+- Spatial reasoning: LLM sees text layout
 - Cost-effective: $1.50/1000 pages
-- Supports tables and forms
 
-**Output Format:**
-```json
-{
-  "full_text": "Combined text from all pages",
-  "blocks_by_document": [
-    {
-      "file": "page1.jpg",
-      "blocks": {
-        "PAGE": [...],
-        "LINE": [...bounding boxes...],
-        "WORD": [...]
-      }
-    }
-  ],
-  "document_count": 2,
-  "avg_confidence": 0.95
-}
-```
+### 6. MCP Tools as Library Functions
 
-### 5. MCP Tools as Library Functions
-
-**MCP Implementation:**
+**Implementation:**
 - MCP tools are Python functions in `mcp-server/src/mcp_server/tools/`
 - No separate server process required
 - Functions imported and called directly by orchestrator
-- `mcp-server/main.py` explicitly states: "No separate MCP server process needed"
 
 **Why:**
-- Simpler deployment - no additional service to manage
-- Direct function calls - lower latency
+- Simpler deployment
+- Lower latency
 - Easier to debug and test
-- Future: Can be exposed as MCP server if needed
 
 ---
 
@@ -211,117 +407,129 @@ User uploads folder → pending
 esec/
 ├── api-server/              # FastAPI REST API
 │   └── src/api_server/
-│       ├── main.py          # 30+ endpoints including /flatten
-│       └── db/schema.sql
-├── document-processor/      # Prefect 3.x pipeline
+│       ├── main.py          # 30+ endpoints
+│       └── db/schema.sql    # PostgreSQL schema
+├── document-processor/      # Asyncio processing pipeline
 │   └── src/document_processor/
-│       ├── main.py          # Prefect orchestrator entry point
-│       ├── flows/
-│       │   ├── document_flow.py    # Main processing DAG
-│       │   ├── file_flow.py        # File generation flow
-│       │   └── orchestrator.py     # DB monitoring orchestrator
+│       ├── main.py          # Entry point
+│       ├── orchestrator.py  # SimpleOrchestrator with recovery
 │       ├── tasks/
-│       │   └── document_tasks.py   # All 7 Prefect tasks
+│       │   ├── document_tasks.py    # All processing steps
+│       │   └── series_regeneration.py  # Series regeneration worker
 │       ├── utils/
-│       │   └── locks.py            # PostgreSQL advisory locks
-│       └── extractors/aws_textract.py
+│       │   └── locks.py     # PostgreSQL advisory locks
+│       └── extractors/
+│           └── aws_textract.py
 ├── mcp-server/              # LLM tools (used as library)
 │   └── src/mcp_server/
 │       ├── llm/bedrock.py
-│       └── tools/           # classify, summarize, score
+│       └── tools/
+│           ├── classify.py
+│           ├── summarize.py
+│           ├── summarize_series.py  # Series-specific extraction
+│           ├── detect_series.py
+│           └── score_performance.py
 ├── web-ui/                  # Ionic React PWA
 │   └── src/
-│       ├── components/DataTable.jsx  # Flattened data display
-│       └── pages/FileDetailPage.jsx  # Shows flattened table
+│       ├── components/DataTable.jsx
+│       └── pages/
 ├── shared/                  # Shared utilities
-│   ├── database.py          # PostgreSQL client (1776 lines)
-│   ├── json_flattener.py    # JSONB to DataFrame conversion (428 lines)
+│   ├── database.py          # PostgreSQL client
+│   ├── event_logger.py      # Event logging utilities
 │   ├── config.py
-│   └── tests/
-│       ├── test_database.py
-│       └── test_json_flattener.py  # 458 lines, 25+ tests
+│   └── types.py
 ├── scripts/
-│   ├── analyze-file-data    # CLI for data extraction & CSV export
+│   ├── create-alfrd-db      # Database initialization
+│   ├── view-events          # Event log viewer
 │   └── ...
-├── docs/
-│   └── JSON_FLATTENING.md   # Complete flattening documentation
 ├── docker/                  # Deployment
 │   ├── Dockerfile
-│   ├── docker-compose.yml
-│   └── supervisord.conf
+│   └── docker-compose.yml
 └── data/                    # Runtime (not in git)
     ├── inbox/              # Input folders
     ├── documents/          # Processed output
-    └── postgres/           # PostgreSQL data (Docker)
+    └── postgres/           # PostgreSQL data
 ```
 
 ---
 
-## Database Schema (PostgreSQL)
+## Database Schema Overview
 
 ### Core Tables
 
-**documents** - Main document metadata
+**documents** - Individual document records
 ```sql
 CREATE TABLE documents (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY,
     filename VARCHAR NOT NULL,
-    status VARCHAR NOT NULL CHECK (status IN (
-        'pending', 'ocr_completed', 'classified', 
-        'scored_classification', 'summarized', 'completed', 'failed'
-    )),
-    document_type VARCHAR,  -- bill/finance/school/event/junk/generic
+    status VARCHAR NOT NULL,
+    document_type VARCHAR,
     extracted_text TEXT,
-    extracted_text_tsv TSVECTOR,  -- Full-text search
-    structured_data JSONB,         -- Type-specific extracted data
-    tags JSONB,                    -- User tags + auto-tags
-    folder_metadata JSONB,         -- meta.json content
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    structured_data JSONB,          -- Series-specific extraction
+    structured_data_generic JSONB,  -- Generic extraction
+    series_prompt_id UUID,          -- Which series prompt used
+    extraction_method VARCHAR,      -- 'generic' or 'series'
+    -- ... other fields
 );
-
-CREATE INDEX idx_documents_fts ON documents USING GIN(extracted_text_tsv);
-CREATE INDEX idx_documents_structured_data ON documents USING GIN(structured_data);
 ```
 
-**prompts** - Versioned prompts with performance tracking
+**series** - Document series (recurring collections)
+```sql
+CREATE TABLE series (
+    id UUID PRIMARY KEY,
+    title VARCHAR NOT NULL,
+    entity VARCHAR NOT NULL,
+    series_type VARCHAR NOT NULL,
+    active_prompt_id UUID,          -- Current series prompt
+    regeneration_pending BOOLEAN,   -- Needs regeneration
+    -- ... other fields
+);
+```
+
+**prompts** - All prompt types including series_summarizer
 ```sql
 CREATE TABLE prompts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    prompt_type VARCHAR NOT NULL,  -- 'classifier' or 'summarizer'
-    document_type VARCHAR,          -- NULL for classifier, type for summarizer
-    prompt_text TEXT NOT NULL CHECK (length(prompt_text) <= 1500),
-    version INT NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
+    id UUID PRIMARY KEY,
+    prompt_type VARCHAR NOT NULL,   -- 'series_summarizer' for series
+    document_type VARCHAR,          -- Series ID for series prompts
+    prompt_text TEXT NOT NULL,
+    version INTEGER,
+    is_active BOOLEAN,
     performance_score FLOAT,
-    documents_processed INT DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    performance_metrics JSONB,      -- Includes schema_definition
+    -- ... other fields
 );
 ```
 
-**document_types** - Dynamic type registry
+**events** - Processing event log
 ```sql
-CREATE TABLE document_types (
-    type_name VARCHAR PRIMARY KEY,
-    description TEXT,
-    created_by VARCHAR DEFAULT 'system',  -- 'system' or 'llm'
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE
+CREATE TABLE events (
+    id UUID PRIMARY KEY,
+    event_category VARCHAR NOT NULL,
+    event_type VARCHAR NOT NULL,
+    document_id UUID,
+    series_id UUID,
+    -- ... LLM tracking fields
+    details JSONB,
+    created_at TIMESTAMP
 );
 ```
 
-**classification_suggestions** - LLM-suggested new types
-```sql
-CREATE TABLE classification_suggestions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    document_id UUID REFERENCES documents(id),
-    suggested_type VARCHAR NOT NULL,
-    confidence FLOAT,
-    reasoning TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    reviewed BOOLEAN DEFAULT FALSE
-);
-```
+---
+
+## API Endpoints
+
+**Base URL:** `http://localhost:8000/api/v1`
+
+- `GET /health` - Health check with DB status
+- `GET /documents` - List documents with filters
+- `GET /documents/{id}` - Document details
+- `GET /series` - List all series
+- `GET /series/{id}` - Series details with documents
+- `GET /files/{id}` - File with aggregated documents
+- `POST /upload-image` - Upload document image
+
+Full OpenAPI docs: `http://localhost:8000/docs`
 
 ---
 
@@ -331,7 +539,7 @@ CREATE TABLE classification_suggestions (
 
 ```bash
 # Terminal 1: PostgreSQL
-brew services start postgresql@15  # or systemctl start postgresql
+brew services start postgresql@15
 
 # Terminal 2: API Server
 ./scripts/start-api
@@ -349,132 +557,7 @@ brew services start postgresql@15  # or systemctl start postgresql
 docker-compose -f docker/docker-compose.yml up -d
 ```
 
-**Supervisord manages:**
-- API Server (port 8000)
-- Document Processor (7 workers)
-- Web UI (port 5173)
-- PostgreSQL (via socket or TCP)
-
-See [`docker/supervisord.conf`](docker/supervisord.conf) for process configuration.
-
 ---
-
-## API Endpoints
-
-**Base URL:** `http://localhost:8000/api/v1`
-
-- `GET /health` - Health check with DB status
-- `GET /documents` - List documents with filters
-- `GET /documents/{id}` - Document details
-- `GET /documents/{id}/file` - Download original file
-- `POST /upload-image` - Upload document image
-
-Full OpenAPI docs: `http://localhost:8000/docs`
-
----
-
-## Current Status (2025-12-10)
-
-### ✅ Completed (Phase 1C + 2A + 2B)
-- PostgreSQL database with asyncpg connection pooling
-- Asyncio orchestrator with semaphore-based concurrency control
-- Automatic retry and stale work recovery mechanisms
-- AWS Textract OCR with block preservation
-- Dynamic document type classification
-- Series-based filing with hybrid tag approach
-- File generation with collection summaries
-- API server with 30+ endpoints
-- Ionic React PWA with data visualization
-- Docker deployment
-- Full database schema with series, files, and tags
-- **JSON flattening system** - Extract nested JSONB to pandas DataFrames
-- **CLI tool** - `analyze-file-data` for data analysis and CSV export
-- **API endpoint** - `/api/v1/files/{file_id}/flatten`
-- **UI integration** - DataTable component in file detail view
-- **Multiple array strategies** - flatten, json, first, count
-- **Comprehensive tests** - 25+ test cases for all scenarios
-
-### ⏳ In Progress (Phase 2C)
-- Real-time status updates in UI
-- End-to-end mobile workflow testing
-
-### ❌ Planned (Phase 3)
-- Hierarchical summaries (weekly → monthly → yearly)
-- Financial tracking with advanced analytics
-- Analytics dashboard with charts
-- Advanced search and filtering
-
----
-
-## Series-Based Filing System
-
-### Overview
-Documents are automatically organized into **series** - recurring collections of related documents from the same entity (e.g., monthly PG&E bills, State Farm insurance statements).
-
-### How It Works
-
-**File Task Process:**
-1. Triggered for documents with status='scored_summary'
-2. Calls `detect_series` MCP tool to analyze document and identify:
-   - Entity name (e.g., "Pacific Gas & Electric")
-   - Series type (e.g., "monthly_utility_bill")
-   - Frequency (monthly/quarterly/annual)
-   - Key metadata (account numbers, policy info)
-3. Creates or finds existing series in database
-4. Adds document to series via junction table
-5. Creates series-specific tag (e.g., "series:pge")
-6. Applies tag to document
-7. Creates file based on series tag
-8. Updates status to 'filed'
-
-**Hybrid Approach:**
-- **Series entities** track recurring relationships and metadata
-- **Tags** provide flexible, user-friendly organization
-- **Files** aggregate documents with matching tags into collections
-
-**Database Tables:**
-- `series` - Series entities with metadata
-- `document_series` - Many-to-many junction table
-- `tags` - Unique tags with usage statistics
-- `document_tags` - Document-tag associations
-- `files` - Auto-generated document collections
-- `file_documents` - File-document associations
-
-### File Generation Flow
-Generates summaries for file collections:
-1. Triggered for files with status='pending' or 'outdated'
-2. Fetches all documents matching file's tags
-3. Builds aggregated content (reverse chronological)
-4. Calls `summarize_file` MCP tool
-5. Updates file with summary and metadata
-6. Sets status='generated'
-
-**File Types:**
-- **LLM-generated**: Created automatically by file task
-- **User-created**: Manual file creation via API
-
-## Prompt Management System
-
-### Self-Improving Prompts
-All LLM interactions use database-stored prompts that evolve based on performance:
-
-**Prompt Types:**
-- `classifier` - Document type classification (single prompt)
-- `summarizer` - Type-specific summaries (one per document type)
-- `file_summarizer` - File collection summaries
-- `series_detector` - Series identification
-
-**Evolution Process:**
-1. Scorer workers evaluate LLM outputs
-2. Generate performance metrics and scores
-3. Suggest prompt improvements
-4. New prompt version created if score improves by ≥0.05
-5. Old versions archived (is_active=false)
-
-**Thresholds:**
-- Minimum 5 documents before scoring
-- Score improvement of 0.05 to update prompt
-- All versions retained for analysis
 
 ## References
 
@@ -484,4 +567,4 @@ All LLM interactions use database-stored prompts that evolve based on performanc
 
 ---
 
-**Last Updated:** 2025-12-10
+**Last Updated:** 2025-12-12
