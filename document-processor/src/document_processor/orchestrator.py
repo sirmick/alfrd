@@ -78,21 +78,35 @@ class SimpleOrchestrator:
                 # Process pending documents
                 await self._process_documents()
                 
+                # Process series needing regeneration
+                await self._process_series_regenerations()
+                
                 # Process pending files
                 await self._process_files()
                 
                 if run_once:
                     logger.info("Run-once mode: waiting for completion")
                     await asyncio.sleep(5)
-                    
+
                     # Check for files created during document processing
                     await self._process_files()
-                    
-                    # Wait for ALL background tasks to complete
+
+                    # Wait for ALL background tasks to complete (including scoring)
                     if self.background_tasks:
                         logger.info(f"Waiting for {len(self.background_tasks)} background tasks to complete...")
                         await asyncio.gather(*self.background_tasks, return_exceptions=True)
                         logger.info("✅ All background tasks complete")
+
+                    # Process series regenerations AFTER scoring tasks complete
+                    # (scoring tasks set regeneration_pending=TRUE)
+                    logger.info("Checking for series needing regeneration...")
+                    await self._process_series_regenerations()
+
+                    # Wait for regeneration tasks if any were started
+                    if self.background_tasks:
+                        logger.info(f"Waiting for {len(self.background_tasks)} regeneration tasks...")
+                        await asyncio.gather(*self.background_tasks, return_exceptions=True)
+
                     break
                 
                 await asyncio.sleep(10)
@@ -204,7 +218,7 @@ class SimpleOrchestrator:
     async def _process_documents(self):
         """Launch document processing workers for ALL processable states."""
         # Get documents in any non-terminal state
-        statuses_to_process = ['pending', 'ocr_completed', 'classified', 'summarized', 'filed']
+        statuses_to_process = ['pending', 'ocr_completed', 'classified', 'summarized', 'filed', 'series_summarized']
         
         docs = []
         for status in statuses_to_process:
@@ -240,7 +254,8 @@ class SimpleOrchestrator:
         """Resume document processing pipeline from current state."""
         from document_processor.tasks.document_tasks import (
             ocr_step, classify_step, score_classification_step,
-            summarize_step, score_summary_step, file_step
+            summarize_step, score_summary_step, series_summarize_step,
+            score_series_extraction_step, file_step
         )
         
         try:
@@ -274,7 +289,7 @@ class SimpleOrchestrator:
                 status = doc['status']
             
             # Step 4: Summarization (if needed)
-            if status in ['pending', 'ocr_completed', 'classified', 'summarizing']:
+            if status in ['pending', 'ocr_completed', 'classified']:
                 summary = await summarize_step(doc_id, self.db, self.bedrock)
                 
                 # Step 5: Score summary (background)
@@ -285,15 +300,28 @@ class SimpleOrchestrator:
                 doc = await self.db.get_document(doc_id)  # Refresh
                 status = doc['status']
             
-            # Step 6: File into series (if needed)
+            # Step 6: File into series (if needed) - MUST run before series summarization
             if status in ['pending', 'ocr_completed', 'classified', 'summarized']:
                 file_id = await file_step(doc_id, self.db, self.bedrock)
                 logger.info(f"✅ Document {doc_id} filed into {file_id}")
                 doc = await self.db.get_document(doc_id)  # Refresh
                 status = doc['status']
             
-            # Step 7: Mark completed (runs for filed or any state that reaches here)
-            if status == 'filed':
+            # Step 7: Series-specific summarization (if needed and document has series)
+            # This runs AFTER file_step creates the series
+            if status in ['pending', 'ocr_completed', 'classified', 'summarized', 'filed']:
+                await series_summarize_step(doc_id, self.db, self.bedrock)
+                
+                # Step 7b: Score series extraction (background)
+                asyncio.create_task(
+                    score_series_extraction_step(doc_id, self.db, self.bedrock)
+                )
+                
+                doc = await self.db.get_document(doc_id)  # Refresh
+                status = doc['status']
+            
+            # Step 8: Mark completed (runs for series_summarized or filed status)
+            if status in ['filed', 'series_summarized']:
                 await self.db.update_document(doc_id, status=DocumentStatus.COMPLETED)
                 logger.info(f"✅ Document {doc_id} marked as completed")
             
@@ -349,6 +377,31 @@ class SimpleOrchestrator:
         except Exception as e:
             logger.error(f"❌ File {file_id} failed: {e}", exc_info=True)
             # Error already handled in task function
+    
+    async def _process_series_regenerations(self):
+        """Process series marked for regeneration."""
+        from document_processor.tasks.series_regeneration import regenerate_series_documents
+        
+        # Find series with regeneration_pending = TRUE
+        series_list = await self.db.list_series(limit=100)
+        pending_series = [s for s in series_list if s.get('regeneration_pending')]
+        
+        if not pending_series:
+            return
+        
+        logger.info(f"🔄 Found {len(pending_series)} series needing regeneration")
+        
+        for series in pending_series:
+            try:
+                logger.info(f"Starting regeneration for series: {series['title']}")
+                regenerated = await regenerate_series_documents(
+                    series['id'],
+                    self.db,
+                    self.bedrock
+                )
+                logger.info(f"✅ Regenerated {regenerated} documents in series '{series['title']}'")
+            except Exception as e:
+                logger.error(f"❌ Failed to regenerate series {series['id']}: {e}", exc_info=True)
     
     async def _periodic_recovery(self):
         """Background task that runs recovery check every X minutes."""

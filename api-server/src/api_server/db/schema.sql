@@ -4,6 +4,29 @@
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- Prompts table - store evolving classifier and summarizer prompts
+-- MOVED BEFORE documents table because documents has a FOREIGN KEY to prompts
+CREATE TABLE IF NOT EXISTS prompts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    prompt_type VARCHAR NOT NULL CHECK (prompt_type IN ('classifier', 'summarizer', 'file_summarizer', 'series_detector', 'series_summarizer')),
+    document_type VARCHAR,  -- NULL for classifier, specific type for summarizers
+    prompt_text TEXT NOT NULL,
+    version INTEGER DEFAULT 1,
+    performance_score FLOAT,
+    performance_metrics JSONB,  -- Detailed scoring metrics
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT true,
+    user_id VARCHAR,
+    
+    -- Prompt behavior configuration (for static vs evolving architecture)
+    can_evolve BOOLEAN DEFAULT true,  -- Whether this prompt can evolve based on performance
+    score_ceiling FLOAT DEFAULT NULL,  -- Max score before stopping evolution (typically 0.95)
+    regenerates_on_update BOOLEAN DEFAULT false,  -- Triggers regeneration of all items on update
+    
+    UNIQUE(prompt_type, document_type, version, user_id)
+);
+
 -- Core documents table
 CREATE TABLE IF NOT EXISTS documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -26,7 +49,10 @@ CREATE TABLE IF NOT EXISTS documents (
         'summarizing',             -- Generating summary
         'summarized',              -- Summary generated
         'scoring_summary',         -- Scoring summarizer performance
-        'filed',                   -- NEW: Added to appropriate file(s)
+        'filed',                   -- Added to appropriate file(s) and series
+        'series_summarizing',      -- NEW: Series-specific extraction in progress
+        'series_summarized',       -- NEW: Series-specific extraction complete
+        'series_scoring',          -- NEW: Scoring series extraction
         'completed',               -- All processing done
         'failed',                  -- Error at any stage
         'permanently_failed'       -- Max retries exceeded
@@ -75,8 +101,15 @@ CREATE TABLE IF NOT EXISTS documents (
     
     -- Summary and structured data
     summary TEXT,                           -- One-line human-readable summary
-    structured_data JSONB,                  -- Extracted fields as JSON (binary)
-    folder_metadata JSONB                   -- Parsed meta.json content
+    structured_data JSONB,                  -- Series-specific extraction (preferred, consistent schema)
+    structured_data_generic JSONB,          -- Generic extraction (fallback, may have schema drift)
+    series_prompt_id UUID,                  -- Which series prompt was used (NEW!)
+    extraction_method VARCHAR DEFAULT 'generic' CHECK (
+        extraction_method IN ('generic', 'series', 'both')
+    ),                                      -- Extraction method tracking (NEW!)
+    folder_metadata JSONB,                  -- Parsed meta.json content
+    
+    FOREIGN KEY (series_prompt_id) REFERENCES prompts(id)
 );
 
 -- Summaries table (weekly, monthly, yearly rollups)
@@ -139,23 +172,6 @@ CREATE TABLE IF NOT EXISTS analytics (
     user_id VARCHAR,
     
     UNIQUE(metric_name, category, period, user_id)
-);
-
--- Prompts table - store evolving classifier and summarizer prompts
-CREATE TABLE IF NOT EXISTS prompts (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    prompt_type VARCHAR NOT NULL CHECK (prompt_type IN ('classifier', 'summarizer')),
-    document_type VARCHAR,  -- NULL for classifier, specific type for summarizers
-    prompt_text TEXT NOT NULL,
-    version INTEGER DEFAULT 1,
-    performance_score FLOAT,
-    performance_metrics JSONB,  -- Detailed scoring metrics
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT true,
-    user_id VARCHAR,
-    
-    UNIQUE(prompt_type, document_type, version, user_id)
 );
 
 -- Track classification suggestions from LLM
@@ -221,6 +237,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_fts ON documents USING GIN(extracted_te
 
 -- JSONB indexes for efficient queries
 CREATE INDEX IF NOT EXISTS idx_documents_structured_data ON documents USING GIN(structured_data);
+CREATE INDEX IF NOT EXISTS idx_documents_generic_data ON documents USING GIN(structured_data_generic);
+CREATE INDEX IF NOT EXISTS idx_documents_extraction_method ON documents(extraction_method);
 
 CREATE INDEX IF NOT EXISTS idx_summaries_period ON summaries(period_type, period_start DESC);
 CREATE INDEX IF NOT EXISTS idx_summaries_category ON summaries(category);
@@ -234,6 +252,7 @@ CREATE INDEX IF NOT EXISTS idx_analytics_user ON analytics(user_id, period DESC)
 
 CREATE INDEX IF NOT EXISTS idx_prompts_active ON prompts(prompt_type, document_type, is_active);
 CREATE INDEX IF NOT EXISTS idx_prompts_performance ON prompts(prompt_type, performance_score DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_prompts_can_evolve ON prompts(can_evolve, prompt_type);
 CREATE INDEX IF NOT EXISTS idx_classification_suggestions_approved ON classification_suggestions(approved, created_at);
 CREATE INDEX IF NOT EXISTS idx_document_types_active ON document_types(is_active, usage_count DESC);
 
@@ -352,7 +371,7 @@ CREATE INDEX IF NOT EXISTS idx_files_source ON files(file_source);
 -- Indexes for stale work detection
 CREATE INDEX IF NOT EXISTS idx_documents_stale_check
     ON documents(status, updated_at)
-    WHERE status IN ('ocr_in_progress', 'summarizing');
+    WHERE status IN ('ocr_in_progress', 'summarizing', 'series_summarizing');
 
 CREATE INDEX IF NOT EXISTS idx_files_stale_check
     ON files(status, updated_at)
@@ -373,13 +392,10 @@ CREATE TABLE IF NOT EXISTS file_tags (
 CREATE INDEX IF NOT EXISTS idx_file_tags_file ON file_tags(file_id);
 CREATE INDEX IF NOT EXISTS idx_file_tags_tag ON file_tags(tag_id);
 
--- Extend prompts table to support file_summarizer and series_detector
-ALTER TABLE prompts DROP CONSTRAINT IF EXISTS prompts_prompt_type_check;
-ALTER TABLE prompts ADD CONSTRAINT prompts_prompt_type_check
-    CHECK (prompt_type IN ('classifier', 'summarizer', 'file_summarizer', 'series_detector'));
+-- Note: prompts table already supports all prompt types (created earlier)
 
--- Insert default file summarizer prompt
-INSERT INTO prompts (prompt_type, document_type, prompt_text, version, is_active, performance_score)
+-- Insert default file summarizer prompt (STATIC - never evolves)
+INSERT INTO prompts (prompt_type, document_type, prompt_text, version, is_active, performance_score, can_evolve, score_ceiling, regenerates_on_update)
 VALUES (
     'file_summarizer',
     NULL,
@@ -396,7 +412,10 @@ Focus on providing context and insights that span multiple documents, not just r
 Be concise but comprehensive. Highlight anomalies, trends, and important relationships between documents.',
     1,
     true,
-    0.8
+    0.8,
+    false,  -- can_evolve = false (static prompt)
+    NULL,   -- score_ceiling = NULL (not applicable)
+    false   -- regenerates_on_update = false (not applicable)
 ) ON CONFLICT (prompt_type, document_type, version, user_id) DO NOTHING;
 
 -- Trigger to auto-update updated_at timestamp on files
@@ -485,6 +504,11 @@ CREATE TABLE IF NOT EXISTS series (
     summary_metadata JSONB,
     status VARCHAR DEFAULT 'active' CHECK (status IN ('active', 'completed', 'archived')),
     
+    -- Series prompt tracking (NEW!)
+    active_prompt_id UUID,                  -- Current series-specific prompt
+    last_schema_update TIMESTAMP WITH TIME ZONE,  -- When prompt was last updated
+    regeneration_pending BOOLEAN DEFAULT FALSE,   -- Needs regeneration with new prompt
+    
     -- Ownership
     user_id VARCHAR,
     source VARCHAR DEFAULT 'llm' CHECK (source IN ('llm', 'user')),
@@ -495,7 +519,10 @@ CREATE TABLE IF NOT EXISTS series (
     last_generated_at TIMESTAMP WITH TIME ZONE,
     
     -- Uniqueness constraint
-    UNIQUE(entity, series_type, user_id)
+    UNIQUE(entity, series_type, user_id),
+    
+    -- Foreign key for series prompt
+    FOREIGN KEY (active_prompt_id) REFERENCES prompts(id)
 );
 
 -- Document-Series junction table
@@ -515,6 +542,8 @@ CREATE INDEX IF NOT EXISTS idx_series_user ON series(user_id);
 CREATE INDEX IF NOT EXISTS idx_series_frequency ON series(frequency) WHERE frequency IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_series_dates ON series(first_document_date, last_document_date);
 CREATE INDEX IF NOT EXISTS idx_series_metadata ON series USING GIN(metadata);
+CREATE INDEX IF NOT EXISTS idx_series_active_prompt ON series(active_prompt_id) WHERE active_prompt_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_series_regeneration_pending ON series(regeneration_pending) WHERE regeneration_pending = TRUE;
 
 CREATE INDEX IF NOT EXISTS idx_document_series_series ON document_series(series_id);
 CREATE INDEX IF NOT EXISTS idx_document_series_document ON document_series(document_id);
@@ -608,8 +637,8 @@ GROUP BY s.id, s.title, s.entity, s.series_type, s.frequency, s.description,
          s.updated_at, s.last_generated_at
 ORDER BY s.last_document_date DESC NULLS LAST;
 
--- Insert default series_detector prompt
-INSERT INTO prompts (prompt_type, document_type, prompt_text, version, is_active, performance_score)
+-- Insert default series_detector prompt (STATIC - never evolves)
+INSERT INTO prompts (prompt_type, document_type, prompt_text, version, is_active, performance_score, can_evolve, score_ceiling, regenerates_on_update)
 VALUES (
     'series_detector',
     NULL,
@@ -644,7 +673,10 @@ Respond ONLY with valid JSON in this exact format:
 }',
     1,
     true,
-    0.8
+    0.8,
+    false,  -- can_evolve = false (static prompt)
+    NULL,   -- score_ceiling = NULL (not applicable)
+    false   -- regenerates_on_update = false (not applicable)
 ) ON CONFLICT (prompt_type, document_type, version, user_id) DO NOTHING;
 
 -- Trigger to automatically add document_type as a tag when classified
@@ -691,3 +723,69 @@ CREATE TRIGGER document_type_auto_tag
     FOR EACH ROW
     WHEN (NEW.document_type IS NOT NULL)
     EXECUTE FUNCTION auto_add_document_type_tag();
+
+-- ===========================================================
+-- EVENT LOG TABLE - Comprehensive event tracking
+-- ===========================================================
+
+-- Events table - unified log for documents, files, and series events
+-- Tracks state transitions, LLM usage, processing events, and errors
+CREATE TABLE IF NOT EXISTS events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+
+    -- Entity reference (at least one must be set)
+    document_id UUID REFERENCES documents(id) ON DELETE CASCADE,
+    file_id UUID REFERENCES files(id) ON DELETE CASCADE,
+    series_id UUID REFERENCES series(id) ON DELETE CASCADE,
+
+    -- Event classification
+    event_category VARCHAR NOT NULL CHECK (event_category IN (
+        'state_transition',
+        'llm_request',
+        'processing',
+        'error',
+        'user_action'
+    )),
+    event_type VARCHAR(100) NOT NULL,  -- e.g., 'status_change', 'llm_classify', 'llm_summarize'
+
+    -- State transition fields
+    old_status VARCHAR(50),
+    new_status VARCHAR(50),
+
+    -- LLM usage fields
+    llm_model VARCHAR(100),
+    llm_prompt_text TEXT,
+    llm_response_text TEXT,
+    llm_request_tokens INTEGER,
+    llm_response_tokens INTEGER,
+    llm_latency_ms INTEGER,
+    llm_cost_usd DECIMAL(10, 6),  -- Track costs with high precision
+
+    -- Processing details
+    task_name VARCHAR(100),
+    details JSONB,  -- Flexible field for additional context
+    error_message TEXT,
+
+    -- Metadata
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    user_id VARCHAR(100)  -- For multi-user support
+);
+
+-- Indexes for efficient querying
+CREATE INDEX IF NOT EXISTS idx_events_document_id ON events(document_id) WHERE document_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_file_id ON events(file_id) WHERE file_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_series_id ON events(series_id) WHERE series_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(event_type);
+CREATE INDEX IF NOT EXISTS idx_events_event_category ON events(event_category);
+CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id) WHERE user_id IS NOT NULL;
+
+-- Composite index for common query patterns
+CREATE INDEX IF NOT EXISTS idx_events_document_created ON events(document_id, created_at DESC) WHERE document_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_file_created ON events(file_id, created_at DESC) WHERE file_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_events_series_created ON events(series_id, created_at DESC) WHERE series_id IS NOT NULL;
+
+COMMENT ON TABLE events IS 'Unified event log for documents, files, and series processing';
+COMMENT ON COLUMN events.event_category IS 'Category: state_transition, llm_request, processing, error, user_action';
+COMMENT ON COLUMN events.event_type IS 'Specific event type (e.g., status_change, llm_classify, ocr_complete)';
+COMMENT ON COLUMN events.details IS 'JSONB field for additional context specific to the event type';

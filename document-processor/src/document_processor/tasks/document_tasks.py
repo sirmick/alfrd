@@ -3,6 +3,7 @@
 from uuid import UUID
 import logging
 import asyncio
+import time
 from typing import Dict, Any
 import json
 from pathlib import Path
@@ -10,8 +11,9 @@ from pathlib import Path
 from shared.database import AlfrdDatabase
 from shared.types import DocumentStatus, PromptType
 from shared.config import Settings
+from shared.event_logger import EventLogger, get_event_logger
 from mcp_server.llm.bedrock import BedrockClient
-from document_processor.utils.locks import document_type_lock
+from document_processor.utils.locks import document_type_lock, series_prompt_lock
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,10 @@ _settings = Settings()
 _textract_semaphore = asyncio.Semaphore(_settings.prefect_textract_workers)
 _bedrock_semaphore = asyncio.Semaphore(_settings.prefect_bedrock_workers)
 _file_gen_semaphore = asyncio.Semaphore(_settings.prefect_file_generation_workers)
+
+# In-memory locks for series prompt creation (one process, asyncio coordination)
+# NOTE: Series prompt locks now use PostgreSQL advisory locks via series_prompt_lock()
+# This ensures cross-task safety even with concurrent asyncio tasks
 
 
 async def ocr_step(doc_id: UUID, db: AlfrdDatabase) -> str:
@@ -42,15 +48,28 @@ async def _ocr_task_impl(doc_id: UUID, db: AlfrdDatabase) -> str:
     from document_processor.extractors.text import TextExtractor
     from shared.constants import META_JSON_FILENAME
     from shared.database import utc_now
-    
+
+    event_logger = get_event_logger(db)
+
     doc = await db.get_document(doc_id)
     if not doc:
         raise ValueError(f"Document {doc_id} not found")
-    
+
+    old_status = doc.get('status')
     await db.update_document(
         doc_id,
         status=DocumentStatus.OCR_IN_PROGRESS,
         processing_started_at=utc_now()
+    )
+
+    # Log state transition
+    await event_logger.log_state_change(
+        entity_type='document',
+        entity_id=doc_id,
+        old_status=old_status,
+        new_status=DocumentStatus.OCR_IN_PROGRESS,
+        task_name='ocr_step',
+        details={'filename': doc.get('filename')}
     )
     
     logger.info(f"OCR processing document {doc_id}")
@@ -168,22 +187,44 @@ async def _ocr_task_impl(doc_id: UUID, db: AlfrdDatabase) -> str:
             extracted_text_path=str(text_file),
             status=DocumentStatus.OCR_COMPLETED
         )
-        
+
+        # Log OCR completion event
+        await event_logger.log_state_change(
+            entity_type='document',
+            entity_id=doc_id,
+            old_status=DocumentStatus.OCR_IN_PROGRESS,
+            new_status=DocumentStatus.OCR_COMPLETED,
+            task_name='ocr_step',
+            details={
+                'text_length': len(full_text),
+                'avg_confidence': avg_confidence,
+                'document_count': len(all_extracted)
+            }
+        )
+
         logger.info(
             f"OCR complete for {doc_id}: {len(full_text)} chars, "
             f"{avg_confidence:.2%} confidence"
         )
-        
+
         return full_text
-        
+
     except Exception as e:
         logger.error(f"OCR failed for {doc_id}: {e}", exc_info=True)
-        
+
+        # Log error event
+        await event_logger.log_error_event(
+            entity_type='document',
+            entity_id=doc_id,
+            error_message=str(e),
+            task_name='ocr_step'
+        )
+
         # Structured exception logging
         from shared.logging_config import log_exception
         log_exception(e, entity_type='document', entity_id=doc_id,
                      task_name='ocr_task')
-        
+
         await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise
 
@@ -207,22 +248,29 @@ async def _classify_task_impl(
 ) -> Dict[str, Any]:
     """Implementation of classify task (extracted for semaphore wrapping)."""
     from mcp_server.tools.classify_dynamic import classify_document_dynamic
-    
+
+    event_logger = get_event_logger(db)
+
     logger.info(f"Classifying document {doc_id}")
-    
+
     try:
         # Get active prompt and known types
         prompt = await db.get_active_prompt(PromptType.CLASSIFIER)
         if not prompt:
             raise ValueError("No active classifier prompt found")
-        
+
         known_types = [t['type_name'] for t in await db.get_document_types()]
+
+        # Get existing tag combinations for context injection (prevents duplicates)
         existing_tags = await db.get_popular_tags(limit=50)
-        
+
         doc = await db.get_document(doc_id)
-        
-        # Run in executor (MCP tools are synchronous)
+
+        logger.info(f"Classifying with {len(existing_tags)} existing tags for context")
+
+        # Run in executor (MCP tools are synchronous) with timing
         loop = asyncio.get_event_loop()
+        start_time = time.time()
         classification = await loop.run_in_executor(
             None,
             classify_document_dynamic,
@@ -232,6 +280,24 @@ async def _classify_task_impl(
             known_types,
             existing_tags,
             bedrock_client
+        )
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # Log LLM classification event
+        await event_logger.log_llm_call(
+            entity_type='document',
+            entity_id=doc_id,
+            event_type='llm_classify',
+            model=bedrock_client.model_id,
+            prompt=prompt['prompt_text'][:2000],  # Truncate for storage
+            response=json.dumps(classification),
+            latency_ms=latency_ms,
+            task_name='classify_step',
+            details={
+                'document_type': classification.get('document_type'),
+                'confidence': classification.get('confidence'),
+                'tags': classification.get('tags', [])
+            }
         )
         
         # Save results
@@ -275,20 +341,41 @@ async def _classify_task_impl(
                 reasoning=classification.get('suggestion_reasoning', '')
             )
         
+        # Log state transition
+        await event_logger.log_state_change(
+            entity_type='document',
+            entity_id=doc_id,
+            old_status=DocumentStatus.OCR_COMPLETED,
+            new_status=DocumentStatus.CLASSIFIED,
+            task_name='classify_step',
+            details={
+                'document_type': classification['document_type'],
+                'confidence': classification['confidence']
+            }
+        )
+
         logger.info(
             f"Classified {doc_id}: {classification['document_type']} "
             f"(confidence: {classification['confidence']:.2%})"
         )
         return classification
-        
+
     except Exception as e:
         logger.error(f"Classification failed for {doc_id}: {e}", exc_info=True)
-        
+
+        # Log error event
+        await event_logger.log_error_event(
+            entity_type='document',
+            entity_id=doc_id,
+            error_message=str(e),
+            task_name='classify_step'
+        )
+
         # Structured exception logging
         from shared.logging_config import log_exception
         log_exception(e, entity_type='document', entity_id=doc_id,
                      task_name='classify_task')
-        
+
         await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise
 
@@ -314,9 +401,11 @@ async def _summarize_task_impl(
     bedrock_client: BedrockClient
 ) -> str:
     """Implementation of summarize task (extracted for semaphore wrapping)."""
+    event_logger = get_event_logger(db)
+
     doc = await db.get_document(doc_id)
     document_type = doc['document_type']
-    
+
     logger.info(f"Summarizing document {doc_id} (type={document_type})")
     
     try:
@@ -383,9 +472,10 @@ Focus on dates, amounts, names, and other relevant details."""
                     with open(llm_json_path, 'r') as f:
                         llm_data = json.load(f)
             
-            # Summarize
+            # Summarize with timing
             from mcp_server.tools.summarize_dynamic import summarize_document_dynamic
             loop = asyncio.get_event_loop()
+            start_time = time.time()
             summary_result = await loop.run_in_executor(
                 None,
                 summarize_document_dynamic,
@@ -396,27 +486,63 @@ Focus on dates, amounts, names, and other relevant details."""
                 llm_data,
                 bedrock_client
             )
-            
-            # Save
+            latency_ms = int((time.time() - start_time) * 1000)
+
+            # Log LLM summarization event
+            await event_logger.log_llm_call(
+                entity_type='document',
+                entity_id=doc_id,
+                event_type='llm_summarize',
+                model=bedrock_client.model_id,
+                prompt=prompt['prompt_text'][:2000],  # Truncate for storage
+                response=json.dumps(summary_result)[:5000],  # Truncate response
+                latency_ms=latency_ms,
+                task_name='summarize_step',
+                details={
+                    'document_type': document_type,
+                    'summary_length': len(summary_result.get('summary', ''))
+                }
+            )
+
+            # Save generic extraction
             await db.update_document(
                 doc_id,
                 summary=summary_result.get('summary', ''),
-                structured_data=json.dumps(summary_result),
+                structured_data_generic=json.dumps(summary_result),  # Generic goes to _generic field
                 status=DocumentStatus.SUMMARIZED
             )
-            
+
+            # Log state transition
+            await event_logger.log_state_change(
+                entity_type='document',
+                entity_id=doc_id,
+                old_status=DocumentStatus.CLASSIFIED,
+                new_status=DocumentStatus.SUMMARIZED,
+                task_name='summarize_step',
+                details={'document_type': document_type}
+            )
+
             logger.info(f"Summarized {doc_id} (lock releasing)")
             return summary_result.get('summary', '')
             
     except Exception as e:
         logger.error(f"Summarization failed for {doc_id}: {e}", exc_info=True)
-        
+
+        # Log error event
+        await event_logger.log_error_event(
+            entity_type='document',
+            entity_id=doc_id,
+            error_message=str(e),
+            task_name='summarize_step',
+            details={'document_type': doc.get('document_type')}
+        )
+
         # Structured exception logging
         from shared.logging_config import log_exception
         log_exception(e, entity_type='document', entity_id=doc_id,
                      task_name='summarize_task',
                      context={'document_type': doc.get('document_type')})
-        
+
         await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise
 
@@ -467,6 +593,17 @@ async def _score_classification_task_impl(
         doc = await db.get_document(doc_id)
         prompt = await db.get_active_prompt(PromptType.CLASSIFIER)
         
+        # Check if prompt can evolve (STATIC prompts never evolve)
+        can_evolve = prompt.get('can_evolve', True)  # Default to True for backward compatibility
+        
+        if not can_evolve:
+            logger.info(f"Classifier prompt is STATIC (can_evolve=false), skipping evolution")
+            await db.update_document(
+                doc_id,
+                status=DocumentStatus.SCORED_CLASSIFICATION
+            )
+            return prompt.get('performance_score') or 0.0
+        
         # Build document_info dict for scoring
         document_info = {
             'extracted_text': doc['extracted_text'],
@@ -486,8 +623,22 @@ async def _score_classification_task_impl(
             bedrock_client
         )
         
-        # Update prompt if significantly improved
+        # Check score ceiling (stop evolution if reached)
+        score_ceiling = prompt.get('score_ceiling')
         current_score = prompt.get('performance_score') or 0
+        
+        if score_ceiling and current_score >= score_ceiling:
+            logger.info(
+                f"Classifier prompt at ceiling ({current_score:.2f} >= {score_ceiling}), "
+                f"skipping evolution"
+            )
+            await db.update_document(
+                doc_id,
+                status=DocumentStatus.SCORED_CLASSIFICATION
+            )
+            return score_result['score']
+        
+        # Update prompt if significantly improved
         if score_result['score'] > (current_score + settings.prompt_update_threshold):
             # Evolve the prompt using the scoring feedback
             from mcp_server.tools.score_performance import evolve_prompt
@@ -518,10 +669,8 @@ async def _score_classification_task_impl(
                 f"v{prompt['version']+1}, score={score_result['score']:.2f}"
             )
         
-        await db.update_document(
-            doc_id,
-            status=DocumentStatus.SUMMARIZING
-        )
+        # Don't update status here - let the orchestrator proceed to summarize step
+        # The document is already in 'classified' status which triggers summarization
         return score_result['score']
         
     except Exception as e:
@@ -566,8 +715,15 @@ async def _score_summary_task_impl(
         
         prompt = await db.get_active_prompt(PromptType.SUMMARIZER, document_type)
         if not prompt:
-            await db.update_document(doc_id, status=DocumentStatus.FILED)
+            # Don't skip to FILED - let orchestrator proceed to series step
             return 0.0
+        
+        # Check if prompt can evolve
+        can_evolve = prompt.get('can_evolve', True)
+        
+        if not can_evolve:
+            logger.info(f"Generic summarizer prompt is STATIC (can_evolve=false), skipping evolution")
+            return prompt.get('performance_score') or 0.0
         
         # Parse structured data
         structured_data = doc.get('structured_data', {})
@@ -592,8 +748,18 @@ async def _score_summary_task_impl(
             bedrock_client
         )
         
-        # Update prompt if improved
+        # Check score ceiling (0.95 for generic summarizer)
+        score_ceiling = prompt.get('score_ceiling', 0.95)
         current_score = prompt.get('performance_score') or 0
+        
+        if current_score >= score_ceiling:
+            logger.info(
+                f"Generic summarizer at ceiling ({current_score:.2f} >= {score_ceiling}), "
+                f"skipping evolution"
+            )
+            return score_result['score']
+        
+        # Update prompt if improved
         if score_result['score'] > (current_score + settings.prompt_update_threshold):
             # Evolve the prompt using the scoring feedback
             from mcp_server.tools.score_performance import evolve_prompt
@@ -625,7 +791,8 @@ async def _score_summary_task_impl(
                 f"v{prompt['version']+1}, score={score_result['score']:.2f}"
             )
         
-        await db.update_document(doc_id, status=DocumentStatus.FILED)
+        # Don't update status here - let the orchestrator proceed to series step
+        # Document status stays as 'summarized' to trigger series summarization
         return score_result['score']
         
     except Exception as e:
@@ -649,9 +816,11 @@ async def file_step(
     """Detect series, create file, add tags."""
     from mcp_server.tools.detect_series import detect_series_with_retry
     from uuid import uuid4
-    
+
+    event_logger = get_event_logger(db)
+
     logger.info(f"Filing document {doc_id}")
-    
+
     try:
         doc = await db.get_document(doc_id)
         tags = await db.get_document_tags(doc_id)
@@ -661,13 +830,46 @@ async def file_step(
         if isinstance(structured_data, str):
             structured_data = json.loads(structured_data)
         
-        # Detect series
+        # Get series detector prompt from database
+        series_prompt = await db.get_active_prompt(PromptType.SERIES_DETECTOR)
+        if not series_prompt:
+            raise ValueError("No active series_detector prompt found")
+        
+        # Get existing series for context injection (prevents duplicates)
+        existing_series = await db.get_all_series_with_context(
+            user_id=doc.get('user_id'),
+            limit=100
+        )
+        
+        logger.info(f"Filing with {len(existing_series)} existing series for context")
+        
+        # Detect series with context injection and timing
+        start_time = time.time()
         series_data = detect_series_with_retry(
             summary=doc['summary'],
             document_type=doc['document_type'],
             structured_data=structured_data,
             tags=tags,
-            bedrock_client=bedrock_client
+            bedrock_client=bedrock_client,
+            series_prompt=series_prompt['prompt_text'],
+            existing_series=existing_series
+        )
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # Log LLM series detection event
+        await event_logger.log_llm_call(
+            entity_type='document',
+            entity_id=doc_id,
+            event_type='llm_series_detect',
+            model=bedrock_client.model_id,
+            prompt=series_prompt['prompt_text'][:2000],
+            response=json.dumps(series_data),
+            latency_ms=latency_ms,
+            task_name='file_step',
+            details={
+                'entity': series_data.get('entity'),
+                'series_type': series_data.get('series_type')
+            }
         )
         
         # Create series
@@ -707,18 +909,53 @@ async def file_step(
         file = await db.find_or_create_file(uuid4(), tags=[series_tag])
         logger.info(f"File {file['id']} created/found for tag '{series_tag}'")
         
+        # Log state transition (document)
+        await event_logger.log_state_change(
+            entity_type='document',
+            entity_id=doc_id,
+            old_status=DocumentStatus.SUMMARIZED,
+            new_status=DocumentStatus.FILED,
+            task_name='file_step',
+            details={
+                'series_id': str(series['id']),
+                'file_id': str(file['id']),
+                'series_tag': series_tag
+            }
+        )
+
+        # Log event against series (document added)
+        await event_logger.log_processing_event(
+            entity_type='series',
+            entity_id=series['id'],
+            event_type='document_added',
+            task_name='file_step',
+            details={
+                'document_id': str(doc_id),
+                'document_type': doc['document_type'],
+                'series_tag': series_tag
+            }
+        )
+
         logger.info(f"Filed {doc_id} into series {series['id']}, file {file['id']}, with tag '{series_tag}'")
-        
+
         return file['id']
-        
+
     except Exception as e:
         logger.error(f"Filing failed for {doc_id}: {e}", exc_info=True)
-        
+
+        # Log error event
+        await event_logger.log_error_event(
+            entity_type='document',
+            entity_id=doc_id,
+            error_message=str(e),
+            task_name='file_step'
+        )
+
         # Structured exception logging
         from shared.logging_config import log_exception
         log_exception(e, entity_type='document', entity_id=doc_id,
                      task_name='file_task')
-        
+
         await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise
 
@@ -741,7 +978,9 @@ async def _generate_file_summary_task_impl(
     """Implementation of file summary generation task (extracted for semaphore wrapping)."""
     from mcp_server.tools.summarize_file import summarize_file
     from datetime import datetime, timezone
-    
+
+    event_logger = get_event_logger(db)
+
     logger.info(f"Generating file summary for {file_id}")
     
     try:
@@ -791,10 +1030,11 @@ async def _generate_file_summary_task_impl(
                 'structured_data': structured_data
             })
         
-        # Generate file summary
+        # Generate file summary with timing
         logger.info(f"Calling summarize_file with {len(content_parts)} documents, tags={file['tags']}")
         loop = asyncio.get_event_loop()
-        
+        start_time = time.time()
+
         try:
             summary = await loop.run_in_executor(
                 None,
@@ -806,11 +1046,28 @@ async def _generate_file_summary_task_impl(
                 bedrock_client,
                 None  # flattened_table (will be auto-generated)
             )
+            latency_ms = int((time.time() - start_time) * 1000)
             logger.info(f"File summary generated successfully: {len(summary.get('summary', ''))} chars")
+
+            # Log LLM file summary event
+            await event_logger.log_llm_call(
+                entity_type='file',
+                entity_id=file_id,
+                event_type='llm_file_summarize',
+                model=bedrock_client.model_id,
+                prompt=f"Summarize file with {len(content_parts)} documents",
+                response=summary.get('summary', '')[:5000],
+                latency_ms=latency_ms,
+                task_name='generate_file_summary_step',
+                details={
+                    'document_count': len(content_parts),
+                    'tags': file.get('tags', [])
+                }
+            )
         except Exception as e:
             logger.error(f"Error in summarize_file: {e}", exc_info=True)
             raise
-        
+
         # Save
         await db.update_file(
             file_id,
@@ -819,21 +1076,432 @@ async def _generate_file_summary_task_impl(
             status='generated',
             last_generated_at=datetime.now(timezone.utc)
         )
-        
+
+        # Log state transition
+        await event_logger.log_state_change(
+            entity_type='file',
+            entity_id=file_id,
+            old_status='generating',
+            new_status='generated',
+            task_name='generate_file_summary_step',
+            details={'summary_length': len(summary.get('summary', ''))}
+        )
+
         logger.info(f"File {file_id}: Summary generated ({len(summary.get('summary', ''))} chars)")
         return summary['summary']
         
     except Exception as e:
         logger.error(f"File summary generation failed for {file_id}: {e}", exc_info=True)
-        
+
+        # Log error event
+        await event_logger.log_error_event(
+            entity_type='file',
+            entity_id=file_id,
+            error_message=str(e),
+            task_name='generate_file_summary_step'
+        )
+
         # Structured exception logging
         from shared.logging_config import log_exception
         log_exception(e, entity_type='file', entity_id=file_id,
                      task_name='generate_file_summary_task')
-        
+
         # Mark file as failed so it doesn't keep retrying
         await db.update_file(
             file_id,
             status='failed'
         )
+        raise
+
+
+async def series_summarize_step(
+    doc_id: UUID,
+    db: AlfrdDatabase,
+    bedrock_client: BedrockClient
+) -> Dict[str, Any]:
+    """
+    Summarize document with series-specific prompt.
+    This runs AFTER file_step() assigns the document to a series.
+    """
+    async with _bedrock_semaphore:
+        return await _series_summarize_task_impl(doc_id, db, bedrock_client)
+
+
+async def _series_summarize_task_impl(
+    doc_id: UUID,
+    db: AlfrdDatabase,
+    bedrock_client: BedrockClient
+) -> Dict[str, Any]:
+    """Implementation of series summarize task."""
+    from mcp_server.tools.summarize_series import (
+        create_series_prompt_from_generic,
+        summarize_with_series_prompt
+    )
+    from uuid import uuid4
+    from shared.database import utc_now
+
+    event_logger = get_event_logger(db)
+
+    logger.info(f"Series summarizing document {doc_id}")
+    
+    try:
+        # Mark as in-progress
+        await db.update_document(
+            doc_id,
+            status='series_summarizing',
+            processing_started_at=utc_now()
+        )
+        
+        doc = await db.get_document(doc_id)
+        
+        # Get series from document_series junction table
+        series_data = await db.get_document_series(doc_id)
+        if not series_data:
+            logger.warning(f"Document {doc_id} not in any series, skipping")
+            await db.update_document(doc_id, status=DocumentStatus.COMPLETED)
+            return {}
+        
+        # get_document_series returns the series dict directly (not a list)
+        series_id = series_data['id']
+        series = await db.get_series(series_id)
+        
+        # ALWAYS check series.active_prompt_id FIRST to reuse existing prompt
+        series_prompt = None
+        if series.get('active_prompt_id'):
+            series_prompt = await db.get_prompt(series['active_prompt_id'])
+            if series_prompt:
+                logger.info(
+                    f"Reusing existing series prompt {series_prompt['id']} "
+                    f"v{series_prompt['version']} for series {series_id}"
+                )
+        
+        # Only create if series has NO active prompt - use DATABASE lock for cross-task safety
+        if not series_prompt:
+            # Use PostgreSQL advisory lock to prevent concurrent prompt creation
+            async with series_prompt_lock(db, series_id):
+                # Double-check after acquiring lock (another task may have created it)
+                series = await db.get_series(series_id)
+                if series.get('active_prompt_id'):
+                    series_prompt = await db.get_prompt(series['active_prompt_id'])
+                    if series_prompt:
+                        logger.info(
+                            f"✅ Another task created series prompt {series_prompt['id']}, reusing it"
+                        )
+
+                # Still no prompt after lock? Create it now
+                if not series_prompt:
+                    logger.info(f"🔒 Creating FIRST series prompt for series {series_id} (DB lock held)")
+
+                    # Get generic prompt for this document type
+                    generic_prompt = await db.get_active_prompt(
+                        PromptType.SUMMARIZER,
+                        doc['document_type']
+                    )
+
+                    if not generic_prompt:
+                        logger.warning(f"No generic prompt for {doc['document_type']}, skipping series extraction")
+                        await db.update_document(doc_id, status=DocumentStatus.COMPLETED)
+                        return {}
+
+                    # Create series-specific prompt
+                    loop = asyncio.get_event_loop()
+                    prompt_data = await loop.run_in_executor(
+                        None,
+                        create_series_prompt_from_generic,
+                        generic_prompt['prompt_text'],
+                        series['entity'],
+                        series['series_type'],
+                        doc['extracted_text'],
+                        bedrock_client
+                    )
+
+                    # Save as new prompt in prompts table
+                    series_prompt_id = uuid4()
+                    await db.create_prompt(
+                        prompt_id=series_prompt_id,
+                        prompt_type='series_summarizer',
+                        document_type=str(series_id),  # Store series_id as document_type
+                        prompt_text=prompt_data['prompt_text'],
+                        version=1,
+                        performance_metrics={
+                            'schema_definition': prompt_data['schema_definition'],
+                            'documents_processed': 0
+                        }
+                    )
+
+                    # Fetch the created prompt
+                    series_prompt = await db.get_prompt(series_prompt_id)
+
+                    # Link to series
+                    await db.update_series(
+                        series_id,
+                        active_prompt_id=series_prompt_id
+                    )
+
+                    logger.info(f"✅ Created FIRST series prompt {series_prompt_id} for series {series_id}")
+
+                    # Log series prompt creation event against series
+                    await event_logger.log_processing_event(
+                        entity_type='series',
+                        entity_id=series_id,
+                        event_type='prompt_created',
+                        task_name='series_summarize_step',
+                        details={
+                            'prompt_id': str(series_prompt_id),
+                            'document_type': doc['document_type'],
+                            'schema_fields': list(prompt_data['schema_definition'].keys()) if prompt_data.get('schema_definition') else []
+                        }
+                    )
+        
+        # Extract schema from performance_metrics
+        perf_metrics = series_prompt.get('performance_metrics', {})
+        if isinstance(perf_metrics, str):
+            perf_metrics = json.loads(perf_metrics)
+        schema_def = perf_metrics.get('schema_definition', {})
+        
+        # Summarize with series prompt with timing
+        loop = asyncio.get_event_loop()
+        start_time = time.time()
+        series_extraction = await loop.run_in_executor(
+            None,
+            summarize_with_series_prompt,
+            doc['extracted_text'],
+            series_prompt['prompt_text'],
+            schema_def,
+            bedrock_client
+        )
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # Log LLM series summarization event
+        await event_logger.log_llm_call(
+            entity_type='document',
+            entity_id=doc_id,
+            event_type='llm_series_summarize',
+            model=bedrock_client.model_id,
+            prompt=series_prompt['prompt_text'][:2000],
+            response=json.dumps(series_extraction)[:5000],
+            latency_ms=latency_ms,
+            task_name='series_summarize_step',
+            details={
+                'series_id': str(series_id),
+                'schema_fields': list(schema_def.keys()) if schema_def else []
+            }
+        )
+
+        # Save series-specific extraction to structured_data (primary field)
+        await db.update_document(
+            doc_id,
+            structured_data=json.dumps(series_extraction),  # Series goes to primary structured_data field
+            series_prompt_id=series_prompt['id'],
+            extraction_method='series',  # Mark as series extraction
+            status='series_summarized'
+        )
+
+        # Log state transition
+        await event_logger.log_state_change(
+            entity_type='document',
+            entity_id=doc_id,
+            old_status='series_summarizing',
+            new_status='series_summarized',
+            task_name='series_summarize_step',
+            details={'series_id': str(series_id)}
+        )
+
+        logger.info(f"Series summarization complete for {doc_id}")
+        return series_extraction
+        
+    except Exception as e:
+        logger.error(f"Series summarization failed for {doc_id}: {e}", exc_info=True)
+
+        # Log error event
+        await event_logger.log_error_event(
+            entity_type='document',
+            entity_id=doc_id,
+            error_message=str(e),
+            task_name='series_summarize_step'
+        )
+
+        from shared.logging_config import log_exception
+        log_exception(e, entity_type='document', entity_id=doc_id,
+                     task_name='series_summarize_step')
+
+        await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
+        raise
+
+
+async def score_series_extraction_step(
+    doc_id: UUID,
+    db: AlfrdDatabase,
+    bedrock_client: BedrockClient
+) -> float:
+    """Score series extraction quality and evolve series prompt if improved."""
+    async with _bedrock_semaphore:
+        return await _score_series_extraction_task_impl(doc_id, db, bedrock_client)
+
+
+async def _score_series_extraction_task_impl(
+    doc_id: UUID,
+    db: AlfrdDatabase,
+    bedrock_client: BedrockClient
+) -> float:
+    """Implementation of score series extraction task."""
+    from mcp_server.tools.score_performance import score_summarization, evolve_prompt
+    from uuid import uuid4
+    from shared.config import Settings
+    from shared.database import utc_now
+    
+    settings = Settings()
+    event_logger = get_event_logger(db)
+
+    logger.info(f"Scoring series extraction for {doc_id}")
+    
+    try:
+        doc = await db.get_document(doc_id)
+        
+        # Get series
+        series_data = await db.get_document_series(doc_id)
+        if not series_data:
+            logger.warning(f"Document {doc_id} not in series, skipping scoring")
+            return 0.0
+        
+        series_id = series_data['id']
+        
+        # Get series prompt
+        series_prompt = await db.get_series_prompt(series_id)
+        if not series_prompt:
+            logger.warning(f"No series prompt for series {series_id}, skipping scoring")
+            return 0.0
+        
+        # Parse series extraction from structured_data (now the primary field)
+        structured_data = doc.get('structured_data', {})
+        if isinstance(structured_data, str):
+            structured_data = json.loads(structured_data)
+        
+        # Build document_info dict for scoring
+        document_info = {
+            'extracted_text': doc['extracted_text'],
+            'filename': doc['filename'],
+            'document_type': doc['document_type'],
+            'structured_data': structured_data  # Score the series extraction
+        }
+        
+        # Score using existing summarization scorer
+        loop = asyncio.get_event_loop()
+        score_result = await loop.run_in_executor(
+            None,
+            score_summarization,
+            document_info,
+            series_prompt['prompt_text'],
+            bedrock_client
+        )
+        
+        # Check if prompt can evolve
+        can_evolve = series_prompt.get('can_evolve', True)
+        
+        if not can_evolve:
+            logger.info(f"Series prompt is STATIC (can_evolve=false), skipping evolution")
+            return series_prompt.get('performance_score') or 0.0
+        
+        # Check score ceiling (0.95 for series summarizer)
+        score_ceiling = series_prompt.get('score_ceiling', 0.95)
+        current_score = series_prompt.get('performance_score') or 0
+        
+        if current_score >= score_ceiling:
+            logger.info(
+                f"Series prompt at ceiling ({current_score:.2f} >= {score_ceiling}), "
+                f"skipping evolution"
+            )
+            return score_result['score']
+        
+        # Update series prompt if significantly improved
+        # This will trigger regeneration of ALL documents in the series
+        logger.info(
+            f"Evolution check: new_score={score_result['score']:.2f}, "
+            f"current_score={current_score:.2f}, threshold={settings.prompt_update_threshold}, "
+            f"required={current_score + settings.prompt_update_threshold:.2f}"
+        )
+        if score_result['score'] > (current_score + settings.prompt_update_threshold):
+            logger.info(
+                f"Series prompt score improved from {current_score:.2f} to {score_result['score']:.2f}"
+            )
+            
+            # Evolve the series prompt
+            new_prompt_text = await loop.run_in_executor(
+                None,
+                evolve_prompt,
+                series_prompt['prompt_text'],
+                'series_summarizer',
+                series_data['entity'],  # Use entity name as doc type
+                score_result.get('feedback', ''),
+                score_result.get('suggested_improvements', ''),
+                None,  # max_words (None for series summarizer)
+                bedrock_client
+            )
+            
+            # Deactivate ALL old prompts for this series before creating new one
+            async with db.pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE prompts
+                    SET is_active = FALSE, updated_at = $2
+                    WHERE prompt_type = 'series_summarizer'
+                      AND document_type = $1
+                      AND is_active = TRUE
+                """, str(series_id), utc_now())
+            
+            logger.info(f"Deactivated old series prompts for series {series_id}")
+            
+            # Create new version of series prompt (will be active by default)
+            new_prompt_id = uuid4()
+            await db.create_series_prompt(
+                prompt_id=new_prompt_id,
+                series_id=series_id,
+                prompt_text=new_prompt_text,
+                version=series_prompt['version'] + 1,
+                performance_score=score_result['score'],
+                performance_metrics=series_prompt.get('performance_metrics', {})
+            )
+            
+            # Mark series for regeneration (regenerates_on_update=true)
+            await db.update_series(
+                series_id,
+                active_prompt_id=new_prompt_id,
+                regeneration_pending=True
+            )
+            
+            logger.info(
+                f"✅ Updated series {series_id} prompt: "
+                f"v{series_prompt['version']+1} (ID: {new_prompt_id}), "
+                f"score={score_result['score']:.2f}, "
+                f"old prompts deactivated, regeneration_pending=True"
+            )
+
+            # Log series prompt evolution event
+            await event_logger.log_processing_event(
+                entity_type='series',
+                entity_id=series_id,
+                event_type='prompt_evolved',
+                task_name='score_series_extraction_step',
+                details={
+                    'old_prompt_id': str(series_prompt['id']),
+                    'new_prompt_id': str(new_prompt_id),
+                    'old_version': series_prompt['version'],
+                    'new_version': series_prompt['version'] + 1,
+                    'old_score': current_score,
+                    'new_score': score_result['score'],
+                    'regeneration_pending': True
+                }
+            )
+        
+        # Don't update status - scoring is background-only
+        # Document stays in 'series_summarized' status
+        return score_result['score']
+        
+    except Exception as e:
+        logger.error(f"Series extraction scoring failed for {doc_id}: {e}", exc_info=True)
+        
+        from shared.logging_config import log_exception
+        log_exception(e, entity_type='document', entity_id=doc_id,
+                     task_name='score_series_extraction_step')
+        
+        await db.update_document(doc_id, status=DocumentStatus.FAILED, error_message=str(e))
         raise

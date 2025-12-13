@@ -20,6 +20,9 @@ class DocumentStatus(str, Enum):
     SUMMARIZING = "summarizing"                 # Generating summary
     SUMMARIZED = "summarized"                   # Summary generated
     SCORING_SUMMARY = "scoring_summary"         # Scoring summarizer performance
+    SERIES_SUMMARIZING = "series_summarizing"   # Series-specific extraction in progress
+    SERIES_SUMMARIZED = "series_summarized"     # Series extraction completed
+    SERIES_SCORING = "series_scoring"           # Scoring series extraction
     FILED = "filed"                             # NEW: Added to appropriate file(s)
     COMPLETED = "completed"                     # All processing done
     FAILED = "failed"                           # Error at any stage
@@ -78,6 +81,9 @@ class PromptType(str, Enum):
     """Types of prompts stored in the database."""
     CLASSIFIER = "classifier"
     SUMMARIZER = "summarizer"
+    FILE_SUMMARIZER = "file_summarizer"
+    SERIES_DETECTOR = "series_detector"
+    SERIES_SUMMARIZER = "series_summarizer"
 
 
 class PromptRecord(BaseModel):

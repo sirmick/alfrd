@@ -5,40 +5,15 @@ Analyze document metadata to determine which recurring series it belongs to.
 
 import json
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
-SERIES_DETECTION_SYSTEM_PROMPT = """You are a document series detection expert. Your task is to analyze a document and determine what recurring series it belongs to.
-
-A **Series** is a collection of related recurring documents from the same entity, such as:
-- Monthly insurance bills from State Farm
-- Utility bills from PG&E
-- Rent receipts from a landlord
-- Tuition bills from a school
-
-Analyze the document and identify:
-
-1. **Entity Name**: The primary organization/company sending this document (e.g., "State Farm Insurance", "Pacific Gas & Electric")
-2. **Series Type**: Category of recurring series using snake_case (e.g., "monthly_insurance_bill", "monthly_utility_bill", "monthly_rent_receipt")
-3. **Frequency**: Recurrence pattern (monthly, quarterly, annual, weekly, etc.)
-4. **Series Title**: Human-readable title for this series (e.g., "State Farm Auto Insurance - Monthly Premiums")
-5. **Description**: 1-2 sentence description of what this series represents
-6. **Key Metadata**: Important identifiers like policy numbers, account numbers, addresses, etc.
-
-Respond ONLY with valid JSON in this exact format:
-{
-  "entity": "Official entity name",
-  "series_type": "snake_case_category",
-  "frequency": "monthly|quarterly|annual|weekly|etc",
-  "title": "Human-readable series name",
-  "description": "Brief description of this series",
-  "metadata": {
-    "key1": "value1",
-    "key2": "value2"
-  }
-}"""
+# DEPRECATED: This hardcoded prompt is no longer used
+# The series detector now fetches prompts from the database
+# This constant is kept for backward compatibility only
+SERIES_DETECTION_SYSTEM_PROMPT = """DEPRECATED - DO NOT USE"""
 
 
 def detect_series(
@@ -47,6 +22,8 @@ def detect_series(
     structured_data: Dict[str, Any],
     tags: list[str],
     bedrock_client,
+    series_prompt: str,
+    existing_series: Optional[List[Dict[str, str]]] = None
 ) -> Dict[str, Any]:
     """Detect which series a document belongs to using LLM analysis.
     
@@ -56,6 +33,9 @@ def detect_series(
         structured_data: Extracted structured data from document
         tags: Document tags
         bedrock_client: AWS Bedrock client instance
+        series_prompt: Series detection prompt from database
+        existing_series: Optional list of existing series for context injection
+                        [{"entity": "State Farm", "series_type": "monthly_insurance_bill"}, ...]
         
     Returns:
         {
@@ -82,7 +62,21 @@ Structured Data: {json.dumps(structured_data, indent=2)}
 
 Tags: {', '.join(tags)}"""
     
-    user_message = f"""{context}
+    # Add existing series context if provided
+    existing_series_context = ""
+    if existing_series and len(existing_series) > 0:
+        series_list = "\n".join([
+            f"  - Entity: \"{s['entity']}\", Type: {s['series_type']}"
+            for s in existing_series
+        ])
+        existing_series_context = f"""
+
+EXISTING SERIES (use these exact names when matching):
+{series_list}
+
+IMPORTANT: If this document belongs to an existing series above, you MUST use the exact entity name and series_type shown. This prevents duplicate series creation."""
+    
+    user_message = f"""{context}{existing_series_context}
 
 Based on this document, identify the recurring series it belongs to. Consider:
 - What organization is sending this document?
@@ -95,7 +89,7 @@ Respond with JSON only."""
     try:
         # Call Bedrock with low temperature for consistent detection
         response_text = bedrock_client.invoke_with_system_and_user(
-            system=SERIES_DETECTION_SYSTEM_PROMPT,
+            system=series_prompt,
             user_message=user_message,
             temperature=0.0,
             max_tokens=800
@@ -151,6 +145,8 @@ def detect_series_with_retry(
     structured_data: Dict[str, Any],
     tags: list[str],
     bedrock_client,
+    series_prompt: str,
+    existing_series: Optional[List[Dict[str, str]]] = None,
     max_retries: int = 2
 ) -> Dict[str, Any]:
     """Detect series with retry logic.
@@ -161,6 +157,8 @@ def detect_series_with_retry(
         structured_data: Extracted structured data
         tags: Document tags
         bedrock_client: AWS Bedrock client instance
+        series_prompt: Series detection prompt from database
+        existing_series: Optional list of existing series for context injection
         max_retries: Maximum number of retry attempts
         
     Returns:
@@ -174,7 +172,8 @@ def detect_series_with_retry(
     for attempt in range(max_retries + 1):
         try:
             return detect_series(
-                summary, document_type, structured_data, tags, bedrock_client
+                summary, document_type, structured_data, tags, bedrock_client,
+                series_prompt, existing_series
             )
         except Exception as e:
             last_error = e

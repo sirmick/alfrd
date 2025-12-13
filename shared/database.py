@@ -334,12 +334,12 @@ class AlfrdDatabase:
         param_count = 1
         
         if status:
-            conditions.append(f"status = ${param_count}")
+            conditions.append(f"d.status = ${param_count}")
             params.append(status)
             param_count += 1
         
         if document_type:
-            conditions.append(f"document_type = ${param_count}")
+            conditions.append(f"d.document_type = ${param_count}")
             params.append(document_type)
             param_count += 1
         
@@ -349,18 +349,22 @@ class AlfrdDatabase:
         
         query = f"""
             SELECT
-                id,
-                created_at,
-                status,
-                document_type,
-                suggested_type,
-                confidence,
-                classification_confidence,
-                summary,
-                structured_data
-            FROM documents
+                d.id,
+                d.created_at,
+                d.status,
+                d.document_type,
+                d.suggested_type,
+                d.confidence,
+                d.classification_confidence,
+                d.summary,
+                d.structured_data,
+                d.extraction_method,
+                d.series_prompt_id,
+                sp.version as series_prompt_version
+            FROM documents d
+            LEFT JOIN prompts sp ON d.series_prompt_id = sp.id
             {where_clause}
-            ORDER BY created_at DESC
+            ORDER BY d.created_at DESC
             LIMIT ${param_count} OFFSET ${param_count + 1}
         """
         
@@ -394,25 +398,31 @@ class AlfrdDatabase:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("""
                 SELECT
-                    id,
-                    created_at,
-                    updated_at,
-                    status,
-                    document_type,
-                    suggested_type,
-                    original_path,
-                    raw_document_path,
-                    extracted_text_path,
-                    extracted_text,
-                    confidence,
-                    classification_confidence,
-                    classification_reasoning,
-                    summary,
-                    structured_data,
-                    error_message,
-                    user_id
-                FROM documents
-                WHERE id = $1
+                    d.id,
+                    d.created_at,
+                    d.updated_at,
+                    d.status,
+                    d.document_type,
+                    d.suggested_type,
+                    d.original_path,
+                    d.raw_document_path,
+                    d.extracted_text_path,
+                    d.extracted_text,
+                    d.confidence,
+                    d.classification_confidence,
+                    d.classification_reasoning,
+                    d.summary,
+                    d.structured_data,
+                    d.structured_data_generic,
+                    d.series_prompt_id,
+                    d.extraction_method,
+                    d.error_message,
+                    d.user_id,
+                    sp.version as series_prompt_version,
+                    sp.prompt_type as series_prompt_type
+                FROM documents d
+                LEFT JOIN prompts sp ON d.series_prompt_id = sp.id
+                WHERE d.id = $1
             """, doc_id)
             
             if not row:
@@ -426,6 +436,29 @@ class AlfrdDatabase:
                     doc['structured_data'] = json.loads(doc['structured_data'])
                 except (json.JSONDecodeError, TypeError):
                     doc['structured_data'] = {}
+            
+            if doc.get('structured_data_generic') and isinstance(doc['structured_data_generic'], str):
+                import json
+                try:
+                    doc['structured_data_generic'] = json.loads(doc['structured_data_generic'])
+                except (json.JSONDecodeError, TypeError):
+                    doc['structured_data_generic'] = {}
+            
+            # Get generic summarizer prompt version for this document type
+            if doc.get('document_type'):
+                generic_prompt = await conn.fetchrow("""
+                    SELECT version, prompt_type
+                    FROM prompts
+                    WHERE prompt_type = 'summarizer'
+                      AND document_type = $1
+                      AND is_active = true
+                    ORDER BY version DESC
+                    LIMIT 1
+                """, doc['document_type'])
+                
+                if generic_prompt:
+                    doc['generic_prompt_version'] = generic_prompt['version']
+                    doc['generic_prompt_type'] = generic_prompt['prompt_type']
             
             return doc
     
@@ -1534,11 +1567,12 @@ class AlfrdDatabase:
                        description, metadata, document_count,
                        first_document_date, last_document_date,
                        expected_frequency_days, summary_text, summary_metadata,
-                       status, user_id, source, created_at, updated_at, last_generated_at
+                       status, user_id, source, created_at, updated_at, last_generated_at,
+                       active_prompt_id, regeneration_pending, last_schema_update
                 FROM series
                 WHERE id = $1
             """, series_id)
-            
+
             return dict(row) if row else None
     
     async def list_series(
@@ -1604,7 +1638,8 @@ class AlfrdDatabase:
             SELECT id, title, entity, series_type, frequency,
                    description, metadata, document_count,
                    first_document_date, last_document_date,
-                   status, created_at, updated_at
+                   status, created_at, updated_at,
+                   active_prompt_id, regeneration_pending
             FROM series
             {where_clause}
             ORDER BY last_document_date DESC NULLS LAST, updated_at DESC
@@ -1746,6 +1781,131 @@ class AlfrdDatabase:
         
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM series WHERE id = $1", series_id)
+    
+    async def get_document_series(self, document_id: UUID) -> Optional[Dict[str, Any]]:
+        """Get series that a document belongs to.
+        
+        Args:
+            document_id: Document UUID
+            
+        Returns:
+            Series dict or None if document is not in a series
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT s.id, s.title, s.entity, s.series_type, s.frequency,
+                       s.description, s.metadata, s.document_count,
+                       s.first_document_date, s.last_document_date,
+                       s.status, s.active_prompt_id, s.last_schema_update,
+                       s.regeneration_pending
+                FROM series s
+                INNER JOIN document_series ds ON s.id = ds.series_id
+                WHERE ds.document_id = $1
+                LIMIT 1
+            """, document_id)
+            
+            return dict(row) if row else None
+    
+    async def get_prompt(self, prompt_id: UUID) -> Optional[Dict[str, Any]]:
+        """Get prompt by ID.
+        
+        Args:
+            prompt_id: Prompt UUID
+            
+        Returns:
+            Prompt dict or None if not found
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT id, prompt_type, document_type, prompt_text,
+                       version, performance_score, performance_metrics,
+                       is_active, created_at, updated_at
+                FROM prompts
+                WHERE id = $1
+            """, prompt_id)
+            
+            return dict(row) if row else None
+    
+    async def create_series_prompt(
+        self,
+        prompt_id: UUID,
+        series_id: UUID,
+        prompt_text: str,
+        version: int = 1,
+        performance_score: float = None,
+        performance_metrics: dict = None
+    ) -> UUID:
+        """Create a series-specific prompt.
+        
+        Args:
+            prompt_id: Prompt UUID
+            series_id: Series UUID this prompt belongs to
+            prompt_text: The prompt content
+            version: Version number
+            performance_score: Performance score (0.0 - 1.0)
+            performance_metrics: Detailed metrics as dict
+            
+        Returns:
+            Prompt UUID
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO prompts (
+                    id, prompt_type, document_type, prompt_text, version,
+                    performance_score, performance_metrics,
+                    is_active, created_at, updated_at
+                ) VALUES ($1, 'series_summarizer', $2, $3, $4, $5, $6, true, $7, $8)
+            """,
+                prompt_id, str(series_id), prompt_text, version,
+                performance_score, performance_metrics,
+                utc_now(), utc_now()
+            )
+            
+            # Update series to reference this prompt
+            await conn.execute("""
+                UPDATE series
+                SET active_prompt_id = $2, last_schema_update = $3
+                WHERE id = $1
+            """, series_id, prompt_id, utc_now())
+        
+        return prompt_id
+    
+    async def get_series_prompt(self, series_id: UUID) -> Optional[Dict[str, Any]]:
+        """Get active prompt for a series.
+        
+        Args:
+            series_id: Series UUID
+            
+        Returns:
+            Prompt dict or None if series has no prompt
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            # First get the series to find its active_prompt_id
+            series_row = await conn.fetchrow("""
+                SELECT active_prompt_id FROM series WHERE id = $1
+            """, series_id)
+            
+            if not series_row or not series_row['active_prompt_id']:
+                return None
+            
+            # Now get the prompt
+            prompt_row = await conn.fetchrow("""
+                SELECT id, prompt_type, document_type, prompt_text,
+                       version, performance_score, performance_metrics,
+                       is_active, created_at, updated_at
+                FROM prompts
+                WHERE id = $1
+            """, series_row['active_prompt_id'])
+            
+            return dict(prompt_row) if prompt_row else None
     
     # ==========================================
     # UTILITY OPERATIONS
@@ -1999,6 +2159,425 @@ class AlfrdDatabase:
         
         return final_tags
     
+    async def get_unique_tag_combinations(
+        self,
+        limit: int = 100
+    ) -> List[List[str]]:
+        """Get unique tag combinations used in documents for context injection.
+        
+        This helps the classifier use consistent tag combinations instead of
+        creating duplicate variations.
+        
+        Args:
+            limit: Maximum number of tag combinations to return
+            
+        Returns:
+            List of tag lists (e.g., [["pg-e", "utility"], ["state-farm", "insurance"]])
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            # Get most common tag combinations from documents
+            rows = await conn.fetch("""
+                SELECT
+                    array_agg(t.tag_name ORDER BY t.tag_name) as tags,
+                    COUNT(*) as usage_count
+                FROM documents d
+                INNER JOIN document_tags dt ON d.id = dt.document_id
+                INNER JOIN tags t ON dt.tag_id = t.id
+                WHERE d.status IN ('completed', 'filed')
+                GROUP BY d.id
+                HAVING COUNT(*) > 1  -- Only combinations with 2+ tags
+                ORDER BY usage_count DESC
+                LIMIT $1
+            """, limit)
+            
+            # Return list of tag lists
+            return [list(row['tags']) for row in rows if row['tags']]
+    
+    # ==========================================
+    # EVENT LOGGING OPERATIONS
+    # ==========================================
+
+    async def log_event(
+        self,
+        event_category: str,
+        event_type: str,
+        document_id: UUID = None,
+        file_id: UUID = None,
+        series_id: UUID = None,
+        old_status: str = None,
+        new_status: str = None,
+        llm_model: str = None,
+        llm_prompt_text: str = None,
+        llm_response_text: str = None,
+        llm_request_tokens: int = None,
+        llm_response_tokens: int = None,
+        llm_latency_ms: int = None,
+        llm_cost_usd: float = None,
+        task_name: str = None,
+        details: dict = None,
+        error_message: str = None,
+        user_id: str = None
+    ) -> UUID:
+        """Log an event to the events table.
+
+        Args:
+            event_category: One of 'state_transition', 'llm_request', 'processing', 'error', 'user_action'
+            event_type: Specific event type (e.g., 'status_change', 'llm_classify', 'ocr_complete')
+            document_id: Associated document UUID (optional)
+            file_id: Associated file UUID (optional)
+            series_id: Associated series UUID (optional)
+            old_status: Previous status (for state transitions)
+            new_status: New status (for state transitions)
+            llm_model: Model used for LLM request
+            llm_prompt_text: Prompt sent to LLM
+            llm_response_text: Response from LLM
+            llm_request_tokens: Input token count
+            llm_response_tokens: Output token count
+            llm_latency_ms: Request latency in milliseconds
+            llm_cost_usd: Cost of the LLM request
+            task_name: Name of the task/step that generated this event
+            details: Additional context as JSONB
+            error_message: Error message (for error events)
+            user_id: User ID for multi-user support
+
+        Returns:
+            Event UUID
+        """
+        await self.initialize()
+
+        event_id = uuid4()
+
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO events (
+                    id, document_id, file_id, series_id,
+                    event_category, event_type,
+                    old_status, new_status,
+                    llm_model, llm_prompt_text, llm_response_text,
+                    llm_request_tokens, llm_response_tokens, llm_latency_ms, llm_cost_usd,
+                    task_name, details, error_message,
+                    created_at, user_id
+                ) VALUES (
+                    $1, $2, $3, $4,
+                    $5, $6,
+                    $7, $8,
+                    $9, $10, $11,
+                    $12, $13, $14, $15,
+                    $16, $17, $18,
+                    $19, $20
+                )
+            """,
+                event_id, document_id, file_id, series_id,
+                event_category, event_type,
+                old_status, new_status,
+                llm_model, llm_prompt_text, llm_response_text,
+                llm_request_tokens, llm_response_tokens, llm_latency_ms, llm_cost_usd,
+                task_name, json.dumps(details) if details else None, error_message,
+                utc_now(), user_id
+            )
+
+        return event_id
+
+    async def log_state_transition(
+        self,
+        entity_type: str,
+        entity_id: UUID,
+        old_status: str,
+        new_status: str,
+        task_name: str = None,
+        details: dict = None,
+        user_id: str = None
+    ) -> UUID:
+        """Convenience method to log a state transition event.
+
+        Args:
+            entity_type: 'document', 'file', or 'series'
+            entity_id: UUID of the entity
+            old_status: Previous status
+            new_status: New status
+            task_name: Name of the task that triggered the transition
+            details: Additional context
+            user_id: User ID for multi-user support
+
+        Returns:
+            Event UUID
+        """
+        document_id = entity_id if entity_type == 'document' else None
+        file_id = entity_id if entity_type == 'file' else None
+        series_id = entity_id if entity_type == 'series' else None
+
+        return await self.log_event(
+            event_category='state_transition',
+            event_type='status_change',
+            document_id=document_id,
+            file_id=file_id,
+            series_id=series_id,
+            old_status=old_status,
+            new_status=new_status,
+            task_name=task_name,
+            details=details,
+            user_id=user_id
+        )
+
+    async def log_llm_request(
+        self,
+        entity_type: str,
+        entity_id: UUID,
+        event_type: str,
+        llm_model: str,
+        llm_prompt_text: str,
+        llm_response_text: str,
+        llm_request_tokens: int = None,
+        llm_response_tokens: int = None,
+        llm_latency_ms: int = None,
+        llm_cost_usd: float = None,
+        task_name: str = None,
+        details: dict = None,
+        user_id: str = None
+    ) -> UUID:
+        """Convenience method to log an LLM request event.
+
+        Args:
+            entity_type: 'document', 'file', or 'series'
+            entity_id: UUID of the entity
+            event_type: Specific type (e.g., 'llm_classify', 'llm_summarize', 'llm_series_detect')
+            llm_model: Model used
+            llm_prompt_text: Prompt sent
+            llm_response_text: Response received
+            llm_request_tokens: Input tokens
+            llm_response_tokens: Output tokens
+            llm_latency_ms: Latency in ms
+            llm_cost_usd: Cost in USD
+            task_name: Task name
+            details: Additional context
+            user_id: User ID
+
+        Returns:
+            Event UUID
+        """
+        document_id = entity_id if entity_type == 'document' else None
+        file_id = entity_id if entity_type == 'file' else None
+        series_id = entity_id if entity_type == 'series' else None
+
+        return await self.log_event(
+            event_category='llm_request',
+            event_type=event_type,
+            document_id=document_id,
+            file_id=file_id,
+            series_id=series_id,
+            llm_model=llm_model,
+            llm_prompt_text=llm_prompt_text,
+            llm_response_text=llm_response_text,
+            llm_request_tokens=llm_request_tokens,
+            llm_response_tokens=llm_response_tokens,
+            llm_latency_ms=llm_latency_ms,
+            llm_cost_usd=llm_cost_usd,
+            task_name=task_name,
+            details=details,
+            user_id=user_id
+        )
+
+    async def log_error(
+        self,
+        entity_type: str,
+        entity_id: UUID,
+        error_message: str,
+        task_name: str = None,
+        details: dict = None,
+        user_id: str = None
+    ) -> UUID:
+        """Convenience method to log an error event.
+
+        Args:
+            entity_type: 'document', 'file', or 'series'
+            entity_id: UUID of the entity
+            error_message: Error message
+            task_name: Task that failed
+            details: Additional context
+            user_id: User ID
+
+        Returns:
+            Event UUID
+        """
+        document_id = entity_id if entity_type == 'document' else None
+        file_id = entity_id if entity_type == 'file' else None
+        series_id = entity_id if entity_type == 'series' else None
+
+        return await self.log_event(
+            event_category='error',
+            event_type='task_error',
+            document_id=document_id,
+            file_id=file_id,
+            series_id=series_id,
+            error_message=error_message,
+            task_name=task_name,
+            details=details,
+            user_id=user_id
+        )
+
+    async def get_events(
+        self,
+        document_id: UUID = None,
+        file_id: UUID = None,
+        series_id: UUID = None,
+        event_category: str = None,
+        event_type: str = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get events for a specific entity or with filters.
+
+        Args:
+            document_id: Filter by document UUID
+            file_id: Filter by file UUID
+            series_id: Filter by series UUID
+            event_category: Filter by category
+            event_type: Filter by type
+            limit: Maximum results
+            offset: Pagination offset
+
+        Returns:
+            List of event dicts ordered by created_at DESC
+        """
+        await self.initialize()
+
+        conditions = []
+        params = []
+        param_count = 1
+
+        if document_id:
+            conditions.append(f"document_id = ${param_count}")
+            params.append(document_id)
+            param_count += 1
+
+        if file_id:
+            conditions.append(f"file_id = ${param_count}")
+            params.append(file_id)
+            param_count += 1
+
+        if series_id:
+            conditions.append(f"series_id = ${param_count}")
+            params.append(series_id)
+            param_count += 1
+
+        if event_category:
+            conditions.append(f"event_category = ${param_count}")
+            params.append(event_category)
+            param_count += 1
+
+        if event_type:
+            conditions.append(f"event_type = ${param_count}")
+            params.append(event_type)
+            param_count += 1
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        params.extend([limit, offset])
+
+        query = f"""
+            SELECT
+                id, document_id, file_id, series_id,
+                event_category, event_type,
+                old_status, new_status,
+                llm_model, llm_prompt_text, llm_response_text,
+                llm_request_tokens, llm_response_tokens, llm_latency_ms, llm_cost_usd,
+                task_name, details, error_message,
+                created_at, user_id
+            FROM events
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ${param_count} OFFSET ${param_count + 1}
+        """
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+            results = []
+            for row in rows:
+                event = dict(row)
+                # Parse details JSONB if it's a string
+                if event.get('details') and isinstance(event['details'], str):
+                    try:
+                        event['details'] = json.loads(event['details'])
+                    except (json.JSONDecodeError, TypeError):
+                        event['details'] = {}
+                results.append(event)
+            return results
+
+    async def get_events_for_entity(
+        self,
+        entity_type: str,
+        entity_id: UUID,
+        limit: int = 100,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Get all events for a specific entity.
+
+        Args:
+            entity_type: 'document', 'file', or 'series'
+            entity_id: UUID of the entity
+            limit: Maximum results
+            offset: Pagination offset
+
+        Returns:
+            List of event dicts ordered by created_at DESC
+        """
+        if entity_type == 'document':
+            return await self.get_events(document_id=entity_id, limit=limit, offset=offset)
+        elif entity_type == 'file':
+            return await self.get_events(file_id=entity_id, limit=limit, offset=offset)
+        elif entity_type == 'series':
+            return await self.get_events(series_id=entity_id, limit=limit, offset=offset)
+        else:
+            raise ValueError(f"Invalid entity_type: {entity_type}. Must be 'document', 'file', or 'series'")
+
+    async def get_all_series_with_context(
+        self,
+        user_id: str = None,
+        limit: int = 100
+    ) -> List[Dict[str, str]]:
+        """Get all series with minimal context for series detection injection.
+        
+        Returns series in format suitable for context injection to prevent
+        duplicate series creation.
+        
+        Args:
+            user_id: Filter by user
+            limit: Maximum number of series
+            
+        Returns:
+            List of dicts with 'entity' and 'series_type' keys
+        """
+        await self.initialize()
+        
+        async with self.pool.acquire() as conn:
+            if user_id is not None:
+                rows = await conn.fetch("""
+                    SELECT entity, series_type
+                    FROM series
+                    WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
+                      AND status = 'active'
+                    ORDER BY last_document_date DESC NULLS LAST
+                    LIMIT $2
+                """, user_id, limit)
+            else:
+                rows = await conn.fetch("""
+                    SELECT entity, series_type
+                    FROM series
+                    WHERE status = 'active'
+                    ORDER BY last_document_date DESC NULLS LAST
+                    LIMIT $1
+                """, limit)
+            
+            return [
+                {
+                    'entity': row['entity'],
+                    'series_type': row['series_type']
+                }
+                for row in rows
+            ]
+    
     # ==========================================
     # RECOVERY OPERATIONS
     # ==========================================
@@ -2025,7 +2604,7 @@ class AlfrdDatabase:
         from datetime import timedelta
         
         # States that indicate active processing
-        stale_statuses = ['ocr_in_progress', 'summarizing']
+        stale_statuses = ['ocr_in_progress', 'summarizing', 'series_summarizing']
         timeout = utc_now() - timedelta(minutes=timeout_minutes)
         
         async with self.pool.acquire() as conn:
@@ -2098,6 +2677,7 @@ class AlfrdDatabase:
         reset_state_map = {
             'ocr_in_progress': 'pending',
             'summarizing': 'classified',
+            'series_summarizing': 'summarized',  # Retry from after generic summarization
         }
         
         new_status = reset_state_map.get(doc['status'], 'pending')

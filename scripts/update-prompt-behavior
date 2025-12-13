@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""Update existing prompts with behavior flags.
+
+This script updates all existing prompts in the database with the correct
+can_evolve, score_ceiling, and regenerates_on_update flags based on their type.
+
+Reference: docs/PROMPT_ARCHITECTURE_REDESIGN.md
+"""
+
+import asyncio
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from shared.database import AlfrdDatabase
+from shared.config import Settings
+
+async def update_prompt_behavior():
+    """Update all existing prompts with behavior flags."""
+    settings = Settings()
+    db = AlfrdDatabase(settings.database_url)
+    
+    try:
+        await db.initialize()
+        
+        print("🔧 Updating prompt behavior flags...")
+        
+        async with db.pool.acquire() as conn:
+            # 1. Classifier: STATIC (never evolve)
+            result = await conn.execute("""
+                UPDATE prompts
+                SET can_evolve = false,
+                    score_ceiling = NULL,
+                    regenerates_on_update = false
+                WHERE prompt_type = 'classifier'
+            """)
+            print(f"✅ Updated classifier prompts: {result}")
+            
+            # 2. Series Detector: STATIC (never evolve)
+            result = await conn.execute("""
+                UPDATE prompts
+                SET can_evolve = false,
+                    score_ceiling = NULL,
+                    regenerates_on_update = false
+                WHERE prompt_type = 'series_detector'
+            """)
+            print(f"✅ Updated series_detector prompts: {result}")
+            
+            # 3. File Summarizer: STATIC (never evolve)
+            result = await conn.execute("""
+                UPDATE prompts
+                SET can_evolve = false,
+                    score_ceiling = NULL,
+                    regenerates_on_update = false
+                WHERE prompt_type = 'file_summarizer'
+            """)
+            print(f"✅ Updated file_summarizer prompts: {result}")
+            
+            # 4. Generic Summarizer: EVOLVING with ceiling (0.95) - no regeneration
+            result = await conn.execute("""
+                UPDATE prompts
+                SET can_evolve = true,
+                    score_ceiling = 0.95,
+                    regenerates_on_update = false
+                WHERE prompt_type = 'summarizer'
+            """)
+            print(f"✅ Updated generic summarizer prompts: {result}")
+            
+            # 5. Series Summarizer: EVOLVING with ceiling (0.95) - WITH regeneration
+            result = await conn.execute("""
+                UPDATE prompts
+                SET can_evolve = true,
+                    score_ceiling = 0.95,
+                    regenerates_on_update = true
+                WHERE prompt_type = 'series_summarizer'
+            """)
+            print(f"✅ Updated series_summarizer prompts: {result}")
+            
+            # Verify results
+            print("\n📊 Current prompt configuration:")
+            rows = await conn.fetch("""
+                SELECT 
+                    prompt_type,
+                    COUNT(*) as count,
+                    bool_and(can_evolve) as all_can_evolve,
+                    AVG(score_ceiling) as avg_ceiling,
+                    bool_and(regenerates_on_update) as all_regenerate
+                FROM prompts
+                GROUP BY prompt_type
+                ORDER BY prompt_type
+            """)
+            
+            for row in rows:
+                print(f"  {row['prompt_type']:20s} | count={row['count']:3d} | "
+                      f"evolve={row['all_can_evolve']} | "
+                      f"ceiling={row['avg_ceiling'] or 'None':6s} | "
+                      f"regen={row['all_regenerate']}")
+        
+        print("\n✨ Prompt behavior update complete!")
+        
+    finally:
+        await db.close()
+
+if __name__ == '__main__':
+    asyncio.run(update_prompt_behavior())

@@ -1254,30 +1254,163 @@ async def list_document_types(
 ):
     """
     List all document types.
-    
+
     Query Parameters:
         - active_only: Only return active types
-    
+
     Returns:
         List of document types
     """
     logger.info(f"GET /api/v1/document-types - active_only={active_only}")
     try:
         types = await database.get_document_types(active_only=active_only)
-        
+
         # Convert UUIDs to strings
         for dt in types:
             dt['id'] = str(dt['id'])
-        
+
         return {
             "document_types": types,
             "count": len(types)
         }
-    
+
     except Exception as e:
         logger.error(f"Error listing document types: {str(e)}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error listing document types: {str(e)}")
+
+
+# ==========================================
+# EVENT LOG ENDPOINTS
+# ==========================================
+
+@app.get("/api/v1/events")
+async def get_events(
+    id: Optional[str] = Query(None, description="Entity UUID (document, file, or series - auto-detected)"),
+    document_id: Optional[str] = Query(None, description="Filter by document UUID (explicit)"),
+    file_id: Optional[str] = Query(None, description="Filter by file UUID (explicit)"),
+    series_id: Optional[str] = Query(None, description="Filter by series UUID (explicit)"),
+    event_category: Optional[str] = Query(None, description="Filter by category (state_transition, llm_request, processing, error, user_action)"),
+    event_type: Optional[str] = Query(None, description="Filter by event type"),
+    limit: int = Query(100, ge=1, le=1000, description="Max number of events to return"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    Get events for documents, files, or series.
+
+    Pass `id` with any UUID and it will auto-detect whether it's a document, file, or series.
+    Alternatively, use explicit document_id/file_id/series_id parameters.
+
+    Query Parameters:
+        - id: Any entity UUID (auto-detects type)
+        - document_id: Filter by document UUID (explicit)
+        - file_id: Filter by file UUID (explicit)
+        - series_id: Filter by series UUID (explicit)
+        - event_category: Filter by category
+        - event_type: Filter by type
+        - limit: Max results (1-1000)
+        - offset: Pagination offset
+
+    Returns:
+        List of events ordered by created_at DESC
+    """
+    logger.info(f"GET /api/v1/events - id={id}, doc={document_id}, file={file_id}, series={series_id}")
+    try:
+        # Parse UUIDs if provided
+        doc_uuid = None
+        file_uuid = None
+        series_uuid = None
+
+        # Handle generic `id` parameter - auto-detect entity type
+        if id:
+            try:
+                entity_uuid = UUID(id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid id format: {id}")
+
+            # Check which table contains this UUID
+            doc = await database.get_document(entity_uuid)
+            if doc:
+                doc_uuid = entity_uuid
+            else:
+                file_record = await database.get_file(entity_uuid)
+                if file_record:
+                    file_uuid = entity_uuid
+                else:
+                    series_record = await database.get_series(entity_uuid)
+                    if series_record:
+                        series_uuid = entity_uuid
+                    else:
+                        raise HTTPException(status_code=404, detail=f"No document, file, or series found with id: {id}")
+
+        # Handle explicit parameters (override auto-detected if both provided)
+        if document_id:
+            try:
+                doc_uuid = UUID(document_id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid document_id format: {document_id}")
+
+        if file_id:
+            try:
+                file_uuid = UUID(file_id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid file_id format: {file_id}")
+
+        if series_id:
+            try:
+                series_uuid = UUID(series_id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid series_id format: {series_id}")
+
+        # Validate event_category if provided
+        if event_category:
+            valid_categories = ['state_transition', 'llm_request', 'processing', 'error', 'user_action']
+            if event_category not in valid_categories:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid event_category. Must be one of: {', '.join(valid_categories)}"
+                )
+
+        # Get events from database
+        events = await database.get_events(
+            document_id=doc_uuid,
+            file_id=file_uuid,
+            series_id=series_uuid,
+            event_category=event_category,
+            event_type=event_type,
+            limit=limit,
+            offset=offset
+        )
+
+        # Convert UUIDs to strings for JSON serialization
+        for event in events:
+            event['id'] = str(event['id'])
+            if event.get('document_id'):
+                event['document_id'] = str(event['document_id'])
+            if event.get('file_id'):
+                event['file_id'] = str(event['file_id'])
+            if event.get('series_id'):
+                event['series_id'] = str(event['series_id'])
+            # Convert datetime to ISO string
+            if event.get('created_at'):
+                event['created_at'] = event['created_at'].isoformat()
+
+        logger.info(f"Returning {len(events)} events")
+
+        return {
+            "events": events,
+            "count": len(events),
+            "limit": limit,
+            "offset": offset
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting events: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Error getting events: {str(e)}")
 
 
 def run_server():
