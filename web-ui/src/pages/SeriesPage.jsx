@@ -16,7 +16,6 @@ import {
   IonRefresher,
   IonRefresherContent,
   IonList,
-  IonSearchbar,
   IonSelect,
   IonSelectOption
 } from '@ionic/react'
@@ -28,7 +27,6 @@ function SeriesPage() {
   const [series, setSeries] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [searchQuery, setSearchQuery] = useState('')
   const [frequencyFilter, setFrequencyFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
 
@@ -36,17 +34,17 @@ function SeriesPage() {
     try {
       setLoading(true)
       setError(null)
-      
+
       // Build query params
       const params = new URLSearchParams({ limit: '50' })
       if (frequencyFilter) params.append('frequency', frequencyFilter)
       if (statusFilter) params.append('status', statusFilter)
-      
+
       const response = await fetch(`/api/v1/series?${params}`)
       if (!response.ok) {
         throw new Error(`Failed to fetch series: ${response.statusText}`)
       }
-      
+
       const data = await response.json()
       setSeries(data.series || [])
     } catch (err) {
@@ -67,7 +65,6 @@ function SeriesPage() {
   }
 
   const clearFilters = () => {
-    setSearchQuery('')
     setFrequencyFilter('')
     setStatusFilter('')
   }
@@ -87,18 +84,6 @@ function SeriesPage() {
     return date.toLocaleDateString()
   }
 
-  // Filter series by search query (client-side)
-  const filteredSeries = series.filter((s) => {
-    if (!searchQuery) return true
-    const query = searchQuery.toLowerCase()
-    return (
-      s.title?.toLowerCase().includes(query) ||
-      s.entity?.toLowerCase().includes(query) ||
-      s.series_type?.toLowerCase().includes(query) ||
-      s.description?.toLowerCase().includes(query)
-    )
-  })
-
   return (
     <IonPage>
       <IonHeader>
@@ -110,15 +95,6 @@ function SeriesPage() {
           <IonButton slot="end" fill="clear" onClick={fetchSeries}>
             <IonIcon icon={refresh} />
           </IonButton>
-        </IonToolbar>
-        <IonToolbar>
-          <IonSearchbar
-            value={searchQuery}
-            onIonInput={(e) => setSearchQuery(e.detail.value)}
-            placeholder="Search series..."
-            debounce={300}
-            showClearButton="always"
-          />
         </IonToolbar>
         <IonToolbar>
           <div style={{ display: 'flex', gap: '8px', padding: '8px' }}>
@@ -134,7 +110,7 @@ function SeriesPage() {
               <IonSelectOption value="annual">Annual</IonSelectOption>
               <IonSelectOption value="weekly">Weekly</IonSelectOption>
             </IonSelect>
-            
+
             <IonSelect
               value={statusFilter}
               placeholder="Status"
@@ -146,8 +122,8 @@ function SeriesPage() {
               <IonSelectOption value="completed">Completed</IonSelectOption>
               <IonSelectOption value="archived">Archived</IonSelectOption>
             </IonSelect>
-            
-            {(frequencyFilter || statusFilter || searchQuery) && (
+
+            {(frequencyFilter || statusFilter) && (
               <IonButton fill="clear" onClick={clearFilters}>
                 <IonIcon icon={close} />
               </IonButton>
@@ -155,7 +131,7 @@ function SeriesPage() {
           </div>
         </IonToolbar>
       </IonHeader>
-      
+
       <IonContent>
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent></IonRefresherContent>
@@ -177,14 +153,14 @@ function SeriesPage() {
           </IonCard>
         )}
 
-        {!loading && !error && filteredSeries.length === 0 && (
+        {!loading && !error && series.length === 0 && (
           <IonCard>
             <IonCardHeader>
-              <IonCardTitle>{searchQuery || frequencyFilter || statusFilter ? 'No Results' : 'No Series'}</IonCardTitle>
+              <IonCardTitle>{frequencyFilter || statusFilter ? 'No Results' : 'No Series'}</IonCardTitle>
             </IonCardHeader>
             <IonCardContent>
-              {searchQuery || frequencyFilter || statusFilter ? (
-                <p>No series match your filters. Try adjusting your search or filters.</p>
+              {frequencyFilter || statusFilter ? (
+                <p>No series match your filters. Try adjusting your filters.</p>
               ) : (
                 <p>No series found yet. Upload recurring documents to automatically create series.</p>
               )}
@@ -192,9 +168,9 @@ function SeriesPage() {
           </IonCard>
         )}
 
-        {!loading && !error && filteredSeries.length > 0 && (
+        {!loading && !error && series.length > 0 && (
           <IonList>
-            {filteredSeries.map((s) => (
+            {series.map((s) => (
               <IonCard
                 key={s.id}
                 button
@@ -224,25 +200,21 @@ function SeriesPage() {
                 </IonCardHeader>
                 <IonCardContent>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center', marginBottom: '8px' }}>
-                    {/* Series type */}
                     <IonBadge color="primary">
                       {s.series_type?.replace(/_/g, ' ')}
                     </IonBadge>
-                    
-                    {/* Frequency */}
+
                     {s.frequency && (
                       <IonBadge color="secondary">
                         {s.frequency}
                       </IonBadge>
                     )}
-                    
-                    {/* Document count */}
+
                     <IonBadge color="light" style={{ marginLeft: 'auto' }}>
                       {s.document_count || 0} docs
                     </IonBadge>
                   </div>
-                  
-                  {/* Date range */}
+
                   {s.first_document_date && s.last_document_date && (
                     <p style={{ fontSize: '0.75em', color: '#999', margin: 0 }}>
                       {formatDate(s.first_document_date)} - {formatDate(s.last_document_date)}

@@ -17,12 +17,9 @@ import {
   IonRefresherContent,
   IonFab,
   IonFabButton,
-  IonLabel,
-  IonItem,
-  IonList,
-  IonSearchbar
+  IonList
 } from '@ionic/react'
-import { camera, documentText, refresh, close } from 'ionicons/icons'
+import { camera, refresh } from 'ionicons/icons'
 import { useHistory } from 'react-router-dom'
 
 function DocumentsPage() {
@@ -30,19 +27,17 @@ function DocumentsPage() {
   const [documents, setDocuments] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [isSearching, setIsSearching] = useState(false)
 
   const fetchDocuments = async () => {
     try {
       setLoading(true)
       setError(null)
-      
+
       const response = await fetch('/api/v1/documents?limit=50')
       if (!response.ok) {
         throw new Error(`Failed to fetch documents: ${response.statusText}`)
       }
-      
+
       const data = await response.json()
       setDocuments(data.documents || [])
     } catch (err) {
@@ -51,52 +46,6 @@ function DocumentsPage() {
     } finally {
       setLoading(false)
     }
-  }
-
-  const performSearch = async (query) => {
-    if (!query || query.trim().length === 0) {
-      // If search is cleared, reload all documents
-      setIsSearching(false)
-      await fetchDocuments()
-      return
-    }
-
-    try {
-      setLoading(true)
-      setError(null)
-      setIsSearching(true)
-      
-      const response = await fetch(`/api/v1/search?q=${encodeURIComponent(query)}&limit=50&include_documents=true&include_files=false&include_series=false`)
-      if (!response.ok) {
-        throw new Error(`Search failed: ${response.statusText}`)
-      }
-
-      const data = await response.json()
-      setDocuments(data.documents || [])
-    } catch (err) {
-      console.error('Error searching documents:', err)
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleSearchChange = (e) => {
-    const query = e.detail.value
-    setSearchQuery(query)
-    
-    // Debounce search - only search after user stops typing for 500ms
-    const timeoutId = setTimeout(() => {
-      performSearch(query)
-    }, 500)
-    
-    return () => clearTimeout(timeoutId)
-  }
-
-  const clearSearch = () => {
-    setSearchQuery('')
-    setIsSearching(false)
-    fetchDocuments()
   }
 
   useEffect(() => {
@@ -132,28 +81,13 @@ function DocumentsPage() {
           <div slot="start" style={{ display: 'flex', alignItems: 'center', marginLeft: '10px' }}>
             <img src="/ALFRD.svg" alt="ALFRD Logo" style={{ height: '32px', width: 'auto' }} />
           </div>
-          <IonTitle>ALFRD Documents</IonTitle>
+          <IonTitle>Documents</IonTitle>
           <IonButton slot="end" fill="clear" onClick={fetchDocuments}>
             <IonIcon icon={refresh} />
           </IonButton>
         </IonToolbar>
-        <IonToolbar>
-          <IonSearchbar
-            value={searchQuery}
-            onIonInput={handleSearchChange}
-            placeholder="Search documents..."
-            debounce={500}
-            showClearButton="always"
-          />
-          {isSearching && (
-            <IonButton slot="end" fill="clear" onClick={clearSearch}>
-              <IonIcon icon={close} />
-              Clear Search
-            </IonButton>
-          )}
-        </IonToolbar>
       </IonHeader>
-      
+
       <IonContent>
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent></IonRefresherContent>
@@ -178,14 +112,10 @@ function DocumentsPage() {
         {!loading && !error && documents.length === 0 && (
           <IonCard>
             <IonCardHeader>
-              <IonCardTitle>{isSearching ? 'No Results' : 'No Documents'}</IonCardTitle>
+              <IonCardTitle>No Documents</IonCardTitle>
             </IonCardHeader>
             <IonCardContent>
-              {isSearching ? (
-                <p>No documents match your search query. Try different keywords.</p>
-              ) : (
-                <p>No documents found. Upload your first document by tapping the camera button below.</p>
-              )}
+              <p>No documents found. Upload your first document by tapping the camera button below.</p>
             </IonCardContent>
           </IonCard>
         )}
@@ -202,7 +132,6 @@ function DocumentsPage() {
                 <IonCardHeader>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                     <div style={{ flex: 1 }}>
-                      {/* Main line: Summary and date */}
                       <IonCardTitle style={{ fontSize: '1.1em', marginBottom: '4px' }}>
                         {doc.summary || doc.document_type || 'Untitled Document'}
                       </IonCardTitle>
@@ -216,16 +145,13 @@ function DocumentsPage() {
                   </div>
                 </IonCardHeader>
                 <IonCardContent>
-                  {/* Second line: Type and tags */}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', alignItems: 'center' }}>
-                    {/* Document type badge */}
                     {doc.document_type && (
                       <IonBadge color="primary" style={{ marginRight: '4px' }}>
                         {doc.document_type}
                       </IonBadge>
                     )}
-                    
-                    {/* Tags */}
+
                     {doc.tags && doc.tags.length > 0 && (
                       doc.tags.map((tag, idx) => (
                         <IonBadge key={idx} color="secondary" style={{ marginRight: '4px' }}>
@@ -233,8 +159,7 @@ function DocumentsPage() {
                         </IonBadge>
                       ))
                     )}
-                    
-                    {/* Classification confidence */}
+
                     {doc.classification_confidence && (
                       <IonBadge color="light" style={{ marginLeft: 'auto' }}>
                         {Math.round(doc.classification_confidence * 100)}%

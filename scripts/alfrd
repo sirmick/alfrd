@@ -1,0 +1,194 @@
+#!/home/mick/esec/venv/bin/python3
+"""
+ALFRD CLI - Dynamically generated from API endpoints.
+
+All commands, options, and help text are auto-generated from FastAPI endpoint definitions.
+Adding a new API endpoint automatically makes it available as a CLI command.
+
+Usage:
+    alfrd search --q "electricity" --limit 20
+    alfrd list-documents --status completed --limit 10
+    alfrd get-document --document-id ABC123
+    alfrd --help
+"""
+
+import asyncio
+import sys
+import json
+from pathlib import Path
+
+# Add paths
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(project_root / "api-server" / "src"))
+
+import click
+from shared.api_wrapper import APIWrapper, EndpointInfo, ParamInfo
+
+
+def snake_to_kebab(name: str) -> str:
+    """Convert snake_case to kebab-case."""
+    return name.replace('_', '-')
+
+
+def kebab_to_snake(name: str) -> str:
+    """Convert kebab-case to snake_case."""
+    return name.replace('-', '_')
+
+
+def format_output(data, output_format: str = 'json'):
+    """Format output data."""
+    if output_format == 'json':
+        print(json.dumps(data, indent=2, default=str))
+    elif output_format == 'compact':
+        print(json.dumps(data, default=str))
+    else:
+        # Simple text format
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, list):
+                    print(f"{key}: ({len(value)} items)")
+                    for item in value[:10]:
+                        if isinstance(item, dict):
+                            summary = item.get('summary') or item.get('title') or item.get('id', str(item))
+                            print(f"  - {str(summary)[:80]}")
+                        else:
+                            print(f"  - {item}")
+                    if len(value) > 10:
+                        print(f"  ... and {len(value) - 10} more")
+                else:
+                    print(f"{key}: {value}")
+        else:
+            print(data)
+
+
+def create_click_option(param: ParamInfo) -> click.Option:
+    """Create a Click option from a ParamInfo."""
+    # Determine Click type
+    if param.type == bool:
+        click_type = bool
+    elif param.type == int:
+        click_type = int
+    elif param.type == float:
+        click_type = float
+    else:
+        click_type = str
+
+    # Option name (kebab-case)
+    opt_name = f"--{snake_to_kebab(param.name)}"
+
+    # Build option kwargs
+    kwargs = {
+        'help': param.description or f"Parameter {param.name}",
+        'required': param.required,
+    }
+
+    # Handle booleans as flags
+    if param.type == bool:
+        if param.default is True:
+            return click.Option(
+                [f"--{snake_to_kebab(param.name)}/--no-{snake_to_kebab(param.name)}"],
+                default=True,
+                help=param.description or f"Parameter {param.name}"
+            )
+        elif param.default is False:
+            return click.Option(
+                [f"--{snake_to_kebab(param.name)}/--no-{snake_to_kebab(param.name)}"],
+                default=False,
+                help=param.description or f"Parameter {param.name}"
+            )
+        else:
+            kwargs['is_flag'] = True
+
+    # Set default if not required
+    if not param.required and param.default is not None:
+        kwargs['default'] = param.default
+    elif not param.required:
+        kwargs['default'] = None
+
+    # Set type for non-booleans
+    if param.type != bool:
+        kwargs['type'] = click_type
+
+    return click.Option([opt_name], **kwargs)
+
+
+def create_command(endpoint: EndpointInfo, api: APIWrapper) -> click.Command:
+    """Create a Click command from an EndpointInfo."""
+
+    # Build the callback function
+    def make_callback(ep: EndpointInfo):
+        def callback(output_format, **kwargs):
+            # Convert kebab-case back to snake_case for API call
+            api_kwargs = {kebab_to_snake(k): v for k, v in kwargs.items() if v is not None}
+
+            async def run():
+                async with APIWrapper() as api_instance:
+                    return await api_instance.call(ep.name, **api_kwargs)
+
+            try:
+                result = asyncio.run(run())
+                format_output(result, output_format)
+            except Exception as e:
+                click.echo(f"Error: {e}", err=True)
+                sys.exit(1)
+
+        return callback
+
+    # Create options from params
+    params = [
+        click.Option(
+            ['-f', '--format', 'output_format'],
+            type=click.Choice(['json', 'compact', 'text']),
+            default='json',
+            help='Output format'
+        )
+    ]
+
+    for p in endpoint.params:
+        params.append(create_click_option(p))
+
+    # Create command
+    cmd = click.Command(
+        name=snake_to_kebab(endpoint.name),
+        callback=make_callback(endpoint),
+        params=params,
+        help=endpoint.description.strip() if endpoint.description else f"Call {endpoint.name} API endpoint"
+    )
+
+    return cmd
+
+
+def create_cli() -> click.Group:
+    """Create the CLI group with all commands dynamically generated."""
+
+    @click.group()
+    def cli():
+        """ALFRD CLI - Query documents, series, files, and more.
+
+        All commands are auto-generated from the API.
+        Use COMMAND --help for detailed parameter info.
+        """
+        pass
+
+    # Load endpoints and create commands
+    api = APIWrapper()
+    api._load_endpoints()
+
+    # Filter out endpoints that don't make sense as CLI commands
+    skip_endpoints = {'root', 'upload_image', 'get_document_file'}
+
+    for name, endpoint in api._endpoints.items():
+        if name in skip_endpoints:
+            continue
+        cmd = create_command(endpoint, api)
+        cli.add_command(cmd)
+
+    return cli
+
+
+# Create and run CLI
+cli = create_cli()
+
+if __name__ == '__main__':
+    cli()

@@ -1,6 +1,6 @@
 import { IonTabs, IonTabBar, IonTabButton, IonIcon, IonLabel, IonRouterOutlet } from '@ionic/react'
 import { Route, Redirect, Switch } from 'react-router-dom'
-import { documentText, folder, camera, layers, cog } from 'ionicons/icons'
+import { documentText, folder, camera, layers, cog, search } from 'ionicons/icons'
 
 import CapturePage from '../pages/CapturePage'
 import DocumentsPage from '../pages/DocumentsPage'
@@ -11,6 +11,7 @@ import CreateFilePage from '../pages/CreateFilePage'
 import SeriesPage from '../pages/SeriesPage'
 import SeriesDetailPage from '../pages/SeriesDetailPage'
 import PromptsPage from '../pages/PromptsPage'
+import SearchPage from '../pages/SearchPage'
 
 function TabBar() {
   return (
@@ -26,6 +27,7 @@ function TabBar() {
           <Route exact path="/series" component={SeriesPage} />
           <Route exact path="/series/:id" component={SeriesDetailPage} />
           <Route exact path="/prompts" component={PromptsPage} />
+          <Route exact path="/search" component={SearchPage} />
           <Route exact path="/">
             <Redirect to="/documents" />
           </Route>
@@ -35,7 +37,7 @@ function TabBar() {
       <IonTabBar slot="bottom">
         <IonTabButton tab="documents" href="/documents">
           <IonIcon icon={documentText} />
-          <IonLabel>Documents</IonLabel>
+          <IonLabel>Docs</IonLabel>
         </IonTabButton>
 
         <IonTabButton tab="series" href="/series">
@@ -43,9 +45,9 @@ function TabBar() {
           <IonLabel>Series</IonLabel>
         </IonTabButton>
 
-        <IonTabButton tab="files" href="/files">
-          <IonIcon icon={folder} />
-          <IonLabel>Files</IonLabel>
+        <IonTabButton tab="search" href="/search">
+          <IonIcon icon={search} />
+          <IonLabel>Search</IonLabel>
         </IonTabButton>
 
         <IonTabButton tab="capture" href="/capture">
@@ -55,7 +57,7 @@ function TabBar() {
 
         <IonTabButton tab="prompts" href="/prompts">
           <IonIcon icon={cog} />
-          <IonLabel>Prompts</IonLabel>
+          <IonLabel>Settings</IonLabel>
         </IonTabButton>
       </IonTabBar>
     </IonTabs>

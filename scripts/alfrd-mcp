@@ -1,0 +1,111 @@
+#!/home/mick/esec/venv/bin/python3
+"""
+ALFRD MCP Server - Auto-generated thin wrapper around API endpoints.
+
+This MCP server dynamically generates tools from FastAPI endpoints.
+Adding a new API endpoint automatically makes it available as an MCP tool.
+
+Usage:
+    # Run as MCP server (stdio transport)
+    ./scripts/alfrd-mcp
+
+    # In Claude Desktop config:
+    {
+      "mcpServers": {
+        "alfrd": {
+          "command": "/home/mick/esec/scripts/alfrd-mcp"
+        }
+      }
+    }
+"""
+
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+# Add paths
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(project_root / "api-server" / "src"))
+
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
+
+from shared.api_wrapper import APIWrapper
+
+
+# Global API wrapper instance
+api: APIWrapper = None
+
+
+def create_server() -> Server:
+    """Create and configure the MCP server."""
+    server = Server("alfrd")
+
+    @server.list_tools()
+    async def list_tools() -> list[Tool]:
+        """List all available tools (generated from API endpoints)."""
+        global api
+        if api is None:
+            api = APIWrapper()
+
+        tools = []
+        for ep in api.list_endpoints():
+            tool_def = ep.to_mcp_tool()
+            tools.append(Tool(
+                name=tool_def["name"],
+                description=tool_def["description"],
+                inputSchema=tool_def["inputSchema"]
+            ))
+        return tools
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+        """Execute an API endpoint as an MCP tool."""
+        global api
+        if api is None:
+            api = APIWrapper()
+            await api.connect()
+
+        if not api._connected:
+            await api.connect()
+
+        try:
+            result = await api.call(name, **arguments)
+            return [TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, default=str)
+            )]
+        except ValueError as e:
+            return [TextContent(
+                type="text",
+                text=json.dumps({"error": str(e)}, indent=2)
+            )]
+        except Exception as e:
+            return [TextContent(
+                type="text",
+                text=json.dumps({
+                    "error": str(e),
+                    "type": type(e).__name__
+                }, indent=2)
+            )]
+
+    return server
+
+
+async def main():
+    """Run the MCP server."""
+    server = create_server()
+
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options()
+        )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

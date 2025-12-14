@@ -16,13 +16,10 @@ import {
   IonRefresher,
   IonRefresherContent,
   IonList,
-  IonSearchbar,
-  IonChip,
-  IonLabel,
   IonFab,
   IonFabButton
 } from '@ionic/react'
-import { folder, add, refresh, reload } from 'ionicons/icons'
+import { folder, add, refresh } from 'ionicons/icons'
 import { useHistory } from 'react-router-dom'
 
 function FilesPage() {
@@ -30,18 +27,17 @@ function FilesPage() {
   const [files, setFiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
-  const [searchQuery, setSearchQuery] = useState('')
 
   const fetchFiles = async () => {
     try {
       setLoading(true)
       setError(null)
-      
+
       const response = await fetch('/api/v1/files?limit=50')
       if (!response.ok) {
         throw new Error(`Failed to fetch files: ${response.statusText}`)
       }
-      
+
       const data = await response.json()
       setFiles(data.files || [])
     } catch (err) {
@@ -54,7 +50,7 @@ function FilesPage() {
 
   useEffect(() => {
     fetchFiles()
-    
+
     // Poll for status changes every 5 seconds
     const interval = setInterval(fetchFiles, 5000)
     return () => clearInterval(interval)
@@ -77,10 +73,10 @@ function FilesPage() {
 
   const getStatusIcon = (status) => {
     if (status === 'regenerating') return <IonSpinner name="crescent" style={{ width: '12px', height: '12px' }} />
-    if (status === 'generated') return '🟢'
-    if (status === 'outdated') return '⚠️'
-    if (status === 'pending') return '🟡'
-    return '⚪'
+    if (status === 'generated') return null
+    if (status === 'outdated') return null
+    if (status === 'pending') return null
+    return null
   }
 
   const formatDate = (dateStr) => {
@@ -89,7 +85,7 @@ function FilesPage() {
     const now = new Date()
     const diffMs = now - date
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-    
+
     if (diffDays === 0) return 'Today'
     if (diffDays === 1) return 'Yesterday'
     if (diffDays < 7) return `${diffDays} days ago`
@@ -97,17 +93,6 @@ function FilesPage() {
     if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`
     return date.toLocaleDateString()
   }
-
-  const filteredFiles = files.filter(file => {
-    if (!searchQuery) return true
-    const query = searchQuery.toLowerCase()
-    const tags = Array.isArray(file.tags) ? file.tags.join(' ').toLowerCase() : ''
-    return (
-      tags.includes(query) ||
-      file.summary_text?.toLowerCase().includes(query) ||
-      file.tag_signature?.toLowerCase().includes(query)
-    )
-  })
 
   return (
     <IonPage>
@@ -121,17 +106,8 @@ function FilesPage() {
             <IonIcon icon={refresh} />
           </IonButton>
         </IonToolbar>
-        <IonToolbar>
-          <IonSearchbar
-            value={searchQuery}
-            onIonInput={(e) => setSearchQuery(e.detail.value)}
-            placeholder="Search files..."
-            debounce={300}
-            showClearButton="always"
-          />
-        </IonToolbar>
       </IonHeader>
-      
+
       <IonContent>
         <IonRefresher slot="fixed" onIonRefresh={handleRefresh}>
           <IonRefresherContent></IonRefresherContent>
@@ -153,27 +129,21 @@ function FilesPage() {
           </IonCard>
         )}
 
-        {!loading && !error && filteredFiles.length === 0 && (
+        {!loading && !error && files.length === 0 && (
           <IonCard>
             <IonCardHeader>
-              <IonCardTitle>{searchQuery ? 'No Results' : 'No Files'}</IonCardTitle>
+              <IonCardTitle>No Files</IonCardTitle>
             </IonCardHeader>
             <IonCardContent>
-              {searchQuery ? (
-                <p>No files match your search query.</p>
-              ) : (
-                <div>
-                  <p>No files created yet. Files group related documents with AI-generated summaries.</p>
-                  <p style={{ marginTop: '10px' }}>Create your first file by clicking the + button below.</p>
-                </div>
-              )}
+              <p>No files created yet. Files group related documents with AI-generated summaries.</p>
+              <p style={{ marginTop: '10px' }}>Create your first file by clicking the + button below.</p>
             </IonCardContent>
           </IonCard>
         )}
 
-        {filteredFiles.length > 0 && (
+        {files.length > 0 && (
           <IonList>
-            {filteredFiles.map((file) => (
+            {files.map((file) => (
               <IonCard
                 key={file.id}
                 button
@@ -201,16 +171,16 @@ function FilesPage() {
                       </IonBadge>
                     </div>
                   </div>
-                  
+
                   <div style={{ fontSize: '0.85em', color: '#666', marginTop: '4px' }}>
                     {file.document_count ?? 0} document{(file.document_count ?? 0) !== 1 ? 's' : ''} •
                     Last updated: {formatDate(file.updated_at)}
                   </div>
                 </IonCardHeader>
-                
+
                 {file.summary_text && file.status === 'generated' && (
                   <IonCardContent>
-                    <p style={{ 
+                    <p style={{
                       margin: 0,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
@@ -223,7 +193,7 @@ function FilesPage() {
                     </p>
                   </IonCardContent>
                 )}
-                
+
                 {file.status === 'pending' && (
                   <IonCardContent>
                     <p style={{ margin: 0, color: '#666', fontStyle: 'italic' }}>
@@ -231,7 +201,7 @@ function FilesPage() {
                     </p>
                   </IonCardContent>
                 )}
-                
+
                 {file.status === 'regenerating' && (
                   <IonCardContent>
                     <p style={{ margin: 0, color: '#666', fontStyle: 'italic' }}>
