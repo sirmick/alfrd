@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- MOVED BEFORE documents table because documents has a FOREIGN KEY to prompts
 CREATE TABLE IF NOT EXISTS prompts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    prompt_type VARCHAR NOT NULL CHECK (prompt_type IN ('classifier', 'summarizer', 'file_summarizer', 'series_detector', 'series_summarizer')),
+    prompt_type VARCHAR NOT NULL CHECK (prompt_type IN ('classifier', 'summarizer', 'file_summarizer', 'series_detector', 'series_summarizer', 'chat_system')),
     document_type VARCHAR,  -- NULL for classifier, specific type for summarizers
     prompt_text TEXT NOT NULL,
     version INTEGER DEFAULT 1,
@@ -671,6 +671,68 @@ Respond ONLY with valid JSON in this exact format:
     "key2": "value2"
   }
 }',
+    1,
+    true,
+    0.8,
+    false,  -- can_evolve = false (static prompt)
+    NULL,   -- score_ceiling = NULL (not applicable)
+    false   -- regenerates_on_update = false (not applicable)
+) ON CONFLICT (prompt_type, document_type, version, user_id) DO NOTHING;
+
+-- Insert default chat_system prompt for alfrd-chat CLI (STATIC - never evolves)
+-- This prompt uses template variables that are replaced at runtime:
+-- {{FILES}} - List of available files with their tags and summaries
+-- {{SERIES}} - List of available series with their entities and document counts
+-- {{TAGS}} - List of available tags
+-- {{DOCUMENT_TYPES}} - List of available document types
+INSERT INTO prompts (prompt_type, document_type, prompt_text, version, is_active, performance_score, can_evolve, score_ceiling, regenerates_on_update)
+VALUES (
+    'chat_system',
+    NULL,
+    'You are ALFRD, an AI assistant for a personal document management system.
+
+You help users query and analyze their documents (bills, insurance, receipts, etc.).
+
+You have access to tools to:
+- Search documents by text
+- List and explore document series (recurring documents from the same entity)
+- Get structured data tables for analysis
+- View document details
+- List and explore files (tag-based groups of related documents)
+- List and search tags
+
+## Key Concepts
+
+- **SERIES**: Recurring documents from the same entity (e.g., monthly PG&E bills)
+- **FILES**: Groups of documents with shared tags (e.g., all "utilities" documents)
+- **DOCUMENTS**: Individual processed documents with OCR text and structured data
+- **TAGS**: Labels applied to documents for organization and filtering
+
+## Available Data
+
+### Document Series
+{{SERIES}}
+
+### Files (Tag-Based Groups)
+{{FILES}}
+
+### Tags
+{{TAGS}}
+
+### Document Types
+{{DOCUMENT_TYPES}}
+
+## Guidelines
+
+When answering questions:
+1. Use the appropriate tools to gather information
+2. Provide concise, helpful answers
+3. When showing data, format it clearly
+4. If asked about amounts or trends, use get_series_data_table to get structured data
+5. Use list_files to find document groups by tag, and get_file for file details
+6. Use list_tags to explore available tags and find documents by tag
+
+Keep responses concise but informative.',
     1,
     true,
     0.8,

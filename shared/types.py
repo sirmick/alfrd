@@ -84,6 +84,7 @@ class PromptType(str, Enum):
     FILE_SUMMARIZER = "file_summarizer"
     SERIES_DETECTOR = "series_detector"
     SERIES_SUMMARIZER = "series_summarizer"
+    CHAT_SYSTEM = "chat_system"  # System prompt for alfrd-chat CLI
 
 
 class PromptRecord(BaseModel):

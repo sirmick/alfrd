@@ -34,7 +34,7 @@ from api_server.main import (
     status,
     list_documents,
     get_document,
-    search_documents,
+    search,
     list_series,
     get_series,
     list_files,
@@ -169,37 +169,65 @@ class TestDocumentEndpoints:
 
 
 # ==========================================
-# DOCUMENT SEARCH ENDPOINTS
+# UNIFIED SEARCH ENDPOINT
 # ==========================================
 
-class TestDocumentSearchEndpoints:
-    """Test document search functionality."""
+class TestSearchEndpoint:
+    """Test unified search functionality across documents, files, and series."""
 
-    async def test_search_documents(self, db):
-        """Test searching documents."""
-        result = await search_documents(q="test", limit=50, database=db)
-        assert "results" in result
-        assert "count" in result
+    async def test_search_basic(self, db):
+        """Test basic search returns all result types."""
+        result = await search(q="test", limit=20, include_documents=True, include_files=True, include_series=True, database=db)
+        assert "documents" in result
+        assert "files" in result
+        assert "series" in result
+        assert "total_count" in result
         assert "query" in result
         assert result["query"] == "test"
 
-    async def test_search_documents_with_limit(self, db):
+    async def test_search_with_limit(self, db):
         """Test search with limit parameter."""
-        result = await search_documents(q="a", limit=5, database=db)
-        assert len(result["results"]) <= 5
+        result = await search(q="a", limit=5, include_documents=True, include_files=True, include_series=True, database=db)
+        assert len(result["documents"]) <= 5
+        assert len(result["files"]) <= 5
+        assert len(result["series"]) <= 5
 
-    async def test_search_documents_returns_list(self, db):
-        """Test that search returns a list of results."""
-        result = await search_documents(q="document", limit=50, database=db)
-        assert isinstance(result["results"], list)
+    async def test_search_documents_only(self, db):
+        """Test search with documents only."""
+        result = await search(q="bill", limit=20, include_documents=True, include_files=False, include_series=False, database=db)
+        assert "documents" in result
+        assert result["files"] == []
+        assert result["series"] == []
 
-    async def test_search_documents_common_term(self, db):
+    async def test_search_files_only(self, db):
+        """Test search with files only."""
+        result = await search(q="insurance", limit=20, include_documents=False, include_files=True, include_series=False, database=db)
+        assert result["documents"] == []
+        assert "files" in result
+        assert result["series"] == []
+
+    async def test_search_series_only(self, db):
+        """Test search with series only."""
+        result = await search(q="PG&E", limit=20, include_documents=False, include_files=False, include_series=True, database=db)
+        assert result["documents"] == []
+        assert result["files"] == []
+        assert "series" in result
+
+    async def test_search_returns_typed_results(self, db):
+        """Test that search results have type field."""
+        result = await search(q="insurance", limit=20, include_documents=True, include_files=True, include_series=True, database=db)
+        for doc in result["documents"]:
+            assert doc.get("type") == "document"
+        for f in result["files"]:
+            assert f.get("type") == "file"
+        for s in result["series"]:
+            assert s.get("type") == "series"
+
+    async def test_search_common_term(self, db):
         """Test searching with a common term that should match."""
-        # Use a term likely to be in most documents
-        result = await search_documents(q="the", limit=100, database=db)
-        # Just verify the search works, count depends on data
-        assert "count" in result
-        assert result["count"] >= 0
+        result = await search(q="the", limit=50, include_documents=True, include_files=True, include_series=True, database=db)
+        assert "total_count" in result
+        assert result["total_count"] >= 0
 
 
 # ==========================================

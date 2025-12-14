@@ -66,13 +66,13 @@ function DocumentsPage() {
       setError(null)
       setIsSearching(true)
       
-      const response = await fetch(`/api/v1/documents/search?q=${encodeURIComponent(query)}&limit=50`)
+      const response = await fetch(`/api/v1/search?q=${encodeURIComponent(query)}&limit=50&include_documents=true&include_files=false&include_series=false`)
       if (!response.ok) {
         throw new Error(`Search failed: ${response.statusText}`)
       }
-      
+
       const data = await response.json()
-      setDocuments(data.results || [])
+      setDocuments(data.documents || [])
     } catch (err) {
       console.error('Error searching documents:', err)
       setError(err.message)

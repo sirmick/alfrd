@@ -1,0 +1,754 @@
+#!/usr/bin/env python3
+"""
+ALFRD Chat - Interactive CLI for querying your documents with AI.
+
+Uses FastMCP to expose document query tools that can be called by an LLM.
+The LLM (AWS Bedrock Nova Lite) orchestrates tool calls to answer questions.
+
+Usage:
+    ./scripts/alfrd-chat
+    ./scripts/alfrd-chat --help
+"""
+
+import asyncio
+import sys
+import json
+import argparse
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+
+# Setup paths
+script_dir = Path(__file__).parent
+project_root = script_dir.parent
+sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(project_root / "mcp-server" / "src"))
+
+import pandas as pd
+
+from shared.database import AlfrdDatabase
+from shared.config import Settings
+from shared.json_flattener import flatten_dict
+from mcp_server.llm.bedrock import BedrockClient
+
+
+class ALFRDChat:
+    """Interactive chat interface for ALFRD document queries."""
+
+    def __init__(self, verbose: bool = False):
+        self.verbose = verbose
+        self.settings = Settings()
+        self.db: Optional[AlfrdDatabase] = None
+        self.llm: Optional[BedrockClient] = None
+        self.conversation_history: List[Dict[str, str]] = []
+
+        # Tool definitions for the LLM
+        self.tools = [
+            {
+                "name": "search",
+                "description": "Unified search across documents, files, and series. Use this to find anything matching a query.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query (searches document text, file summaries/tags, and series entities/titles)"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum results per type to return (default: 10)",
+                            "default": 10
+                        },
+                        "include_documents": {
+                            "type": "boolean",
+                            "description": "Include document results (default: true)",
+                            "default": True
+                        },
+                        "include_files": {
+                            "type": "boolean",
+                            "description": "Include file results (default: true)",
+                            "default": True
+                        },
+                        "include_series": {
+                            "type": "boolean",
+                            "description": "Include series results (default: true)",
+                            "default": True
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "list_series",
+                "description": "List all document series (recurring documents from same entity like monthly bills).",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum series to return",
+                            "default": 20
+                        }
+                    }
+                }
+            },
+            {
+                "name": "get_series_details",
+                "description": "Get details about a specific series including all its documents.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "series_id": {
+                            "type": "string",
+                            "description": "UUID of the series"
+                        }
+                    },
+                    "required": ["series_id"]
+                }
+            },
+            {
+                "name": "get_series_data_table",
+                "description": "Get structured data from a series as a table. Useful for analyzing amounts, dates, etc.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "series_id": {
+                            "type": "string",
+                            "description": "UUID of the series"
+                        }
+                    },
+                    "required": ["series_id"]
+                }
+            },
+            {
+                "name": "list_document_types",
+                "description": "List all document types in the system.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "list_documents_by_type",
+                "description": "List documents filtered by type (e.g., 'utility_bill', 'insurance', 'rent').",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "document_type": {
+                            "type": "string",
+                            "description": "Document type to filter by"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum documents to return",
+                            "default": 20
+                        }
+                    },
+                    "required": ["document_type"]
+                }
+            },
+            {
+                "name": "get_document",
+                "description": "Get full details of a specific document by ID.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "document_id": {
+                            "type": "string",
+                            "description": "UUID of the document"
+                        }
+                    },
+                    "required": ["document_id"]
+                }
+            },
+            {
+                "name": "get_stats",
+                "description": "Get overall statistics about the document database.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "list_files",
+                "description": "List files (tag-based groups of related documents). Files group documents by shared tags.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum files to return",
+                            "default": 20
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Filter by tags (files must have all specified tags)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "get_file",
+                "description": "Get details about a specific file including its summary and document count.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {
+                            "type": "string",
+                            "description": "UUID of the file"
+                        }
+                    },
+                    "required": ["file_id"]
+                }
+            },
+            {
+                "name": "get_file_documents",
+                "description": "Get all documents in a file (documents sharing the file's tags).",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "file_id": {
+                            "type": "string",
+                            "description": "UUID of the file"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum documents to return",
+                            "default": 20
+                        }
+                    },
+                    "required": ["file_id"]
+                }
+            },
+            {
+                "name": "list_tags",
+                "description": "List all tags in the system with usage counts.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum tags to return",
+                            "default": 50
+                        },
+                        "category": {
+                            "type": "string",
+                            "description": "Filter by tag category (e.g., 'document_type', 'series', 'user')"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "search_tags",
+                "description": "Search for tags by name pattern.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query to match against tag names"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum tags to return",
+                            "default": 20
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        ]
+
+    async def initialize(self):
+        """Initialize database and LLM connections."""
+        self.db = AlfrdDatabase(self.settings.database_url)
+        await self.db.initialize()
+        self.llm = BedrockClient()
+
+    async def close(self):
+        """Close connections."""
+        if self.db:
+            await self.db.close()
+
+    async def execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
+        """Execute a tool and return the result as a string."""
+        try:
+            if tool_name == "search":
+                results = await self.db.search(
+                    query=tool_input["query"],
+                    limit=tool_input.get("limit", 10),
+                    include_documents=tool_input.get("include_documents", True),
+                    include_files=tool_input.get("include_files", True),
+                    include_series=tool_input.get("include_series", True)
+                )
+                return json.dumps(results, indent=2, default=str)
+
+            elif tool_name == "list_series":
+                from uuid import UUID
+                results = await self.db.list_series(limit=tool_input.get("limit", 20))
+                # Simplify for display
+                simplified = []
+                for s in results:
+                    simplified.append({
+                        "id": str(s["id"]),
+                        "entity": s.get("entity"),
+                        "title": s.get("title"),
+                        "document_count": s.get("document_count", 0),
+                        "series_type": s.get("series_type")
+                    })
+                return json.dumps(simplified, indent=2, default=str)
+
+            elif tool_name == "get_series_details":
+                from uuid import UUID
+                series_id = UUID(tool_input["series_id"])
+                series = await self.db.get_series(series_id)
+                if not series:
+                    return json.dumps({"error": "Series not found"})
+                docs = await self.db.get_series_documents(series_id)
+                return json.dumps({
+                    "series": series,
+                    "documents": docs[:10],  # Limit to 10 for context
+                    "total_documents": len(docs)
+                }, indent=2, default=str)
+
+            elif tool_name == "get_series_data_table":
+                from uuid import UUID
+                series_id = UUID(tool_input["series_id"])
+                docs = await self.db.get_series_documents(series_id)
+
+                # Extract and flatten structured data from documents
+                flattened_rows = []
+                for doc in docs:
+                    if doc.get("structured_data"):
+                        row = {"document_id": str(doc["id"])}
+                        # Flatten nested structured data
+                        flat_data = flatten_dict(doc["structured_data"])
+                        row.update(flat_data)
+                        flattened_rows.append(row)
+
+                if not flattened_rows:
+                    return json.dumps({"error": "No structured data found in series"})
+
+                # Convert to DataFrame for nice table output
+                try:
+                    df = pd.DataFrame(flattened_rows)
+                    # Convert to markdown table for LLM readability
+                    return df.to_markdown(index=False)
+                except Exception as e:
+                    # Fallback to JSON
+                    return json.dumps(flattened_rows[:5], indent=2, default=str)
+
+            elif tool_name == "list_document_types":
+                results = await self.db.get_document_types(active_only=True)
+                return json.dumps([{"name": dt["name"], "description": dt.get("description", "")} for dt in results], indent=2)
+
+            elif tool_name == "list_documents_by_type":
+                results = await self.db.list_documents(
+                    status="completed",
+                    document_type=tool_input["document_type"],
+                    limit=tool_input.get("limit", 20)
+                )
+                # Simplify for display
+                simplified = []
+                for d in results:
+                    simplified.append({
+                        "id": str(d["id"]),
+                        "filename": d.get("filename"),
+                        "document_type": d.get("document_type"),
+                        "summary": d.get("summary", "")[:200],  # Truncate
+                        "created_at": str(d.get("created_at"))
+                    })
+                return json.dumps(simplified, indent=2, default=str)
+
+            elif tool_name == "get_document":
+                from uuid import UUID
+                doc_id = UUID(tool_input["document_id"])
+                doc = await self.db.get_document_full(doc_id)
+                if not doc:
+                    return json.dumps({"error": "Document not found"})
+                # Include key fields
+                return json.dumps({
+                    "id": str(doc["id"]),
+                    "filename": doc.get("filename"),
+                    "document_type": doc.get("document_type"),
+                    "status": doc.get("status"),
+                    "summary": doc.get("summary"),
+                    "structured_data": doc.get("structured_data"),
+                    "extracted_text": doc.get("extracted_text", "")[:2000],  # Truncate
+                    "created_at": str(doc.get("created_at"))
+                }, indent=2, default=str)
+
+            elif tool_name == "get_stats":
+                stats = await self.db.get_stats()
+                return json.dumps(stats, indent=2, default=str)
+
+            elif tool_name == "list_files":
+                results = await self.db.list_files(
+                    limit=tool_input.get("limit", 20),
+                    tags=tool_input.get("tags")
+                )
+                # Simplify for display
+                simplified = []
+                for f in results:
+                    simplified.append({
+                        "id": str(f["id"]),
+                        "tags": f.get("tags", []),
+                        "document_count": f.get("document_count", 0),
+                        "status": f.get("status"),
+                        "summary": (f.get("summary_text") or "")[:200]
+                    })
+                return json.dumps(simplified, indent=2, default=str)
+
+            elif tool_name == "get_file":
+                from uuid import UUID
+                file_id = UUID(tool_input["file_id"])
+                file = await self.db.get_file(file_id)
+                if not file:
+                    return json.dumps({"error": "File not found"})
+                return json.dumps({
+                    "id": str(file["id"]),
+                    "tags": file.get("tags", []),
+                    "document_count": file.get("document_count", 0),
+                    "status": file.get("status"),
+                    "summary": file.get("summary_text"),
+                    "first_document_date": str(file.get("first_document_date")),
+                    "last_document_date": str(file.get("last_document_date"))
+                }, indent=2, default=str)
+
+            elif tool_name == "get_file_documents":
+                from uuid import UUID
+                file_id = UUID(tool_input["file_id"])
+                docs = await self.db.get_file_documents(file_id)
+                limit = tool_input.get("limit", 20)
+                # Simplify for display
+                simplified = []
+                for d in docs[:limit]:
+                    simplified.append({
+                        "id": str(d["id"]),
+                        "filename": d.get("filename"),
+                        "document_type": d.get("document_type"),
+                        "summary": (d.get("summary") or "")[:200],
+                        "created_at": str(d.get("created_at"))
+                    })
+                return json.dumps({
+                    "documents": simplified,
+                    "total": len(docs)
+                }, indent=2, default=str)
+
+            elif tool_name == "list_tags":
+                results = await self.db.get_all_tags(
+                    limit=tool_input.get("limit", 50)
+                )
+                # Filter by category if provided
+                category = tool_input.get("category")
+                if category:
+                    results = [t for t in results if t.get("category") == category]
+                # Simplify for display
+                simplified = []
+                for t in results:
+                    simplified.append({
+                        "name": t.get("tag_name"),
+                        "usage_count": t.get("usage_count", 0),
+                        "category": t.get("category")
+                    })
+                return json.dumps(simplified, indent=2, default=str)
+
+            elif tool_name == "search_tags":
+                results = await self.db.search_tags(
+                    query=tool_input["query"],
+                    limit=tool_input.get("limit", 20)
+                )
+                return json.dumps(results, indent=2, default=str)
+
+            else:
+                return json.dumps({"error": f"Unknown tool: {tool_name}"})
+
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+
+    async def _build_system_prompt(self) -> str:
+        """Build the system prompt for the LLM with dynamic context."""
+        # Load base prompt from database
+        prompt_record = await self.db.get_active_prompt('chat_system')
+        if prompt_record:
+            base_prompt = prompt_record['prompt_text']
+        else:
+            # Fallback if not in DB
+            base_prompt = """You are ALFRD, an AI assistant for a personal document management system.
+
+You help users query and analyze their documents (bills, insurance, receipts, etc.).
+
+## Available Data
+
+### Document Series
+{{SERIES}}
+
+### Files (Tag-Based Groups)
+{{FILES}}
+
+### Tags
+{{TAGS}}
+
+### Document Types
+{{DOCUMENT_TYPES}}
+
+Use the tools available to help the user query their documents."""
+
+        # Gather dynamic context
+        series_list = await self.db.list_series(limit=20)
+        files_list = await self.db.list_files(limit=20)
+        tags_list = await self.db.get_all_tags(limit=30)
+        doc_types = await self.db.get_document_types(active_only=True)
+
+        # Format series context
+        series_text = ""
+        for s in series_list:
+            series_text += f"- {s.get('entity', 'Unknown')}: {s.get('title', '')} ({s.get('document_count', 0)} docs) [ID: {s['id']}]\n"
+        if not series_text:
+            series_text = "No document series found.\n"
+
+        # Format files context
+        files_text = ""
+        for f in files_list:
+            tags = ", ".join(f.get('tags', []))
+            files_text += f"- Tags: [{tags}] ({f.get('document_count', 0)} docs) [ID: {f['id']}]\n"
+        if not files_text:
+            files_text = "No files found.\n"
+
+        # Format tags context
+        tags_text = ""
+        for t in tags_list:
+            tags_text += f"- {t.get('tag_name', '')} ({t.get('usage_count', 0)} uses)\n"
+        if not tags_text:
+            tags_text = "No tags found.\n"
+
+        # Format document types context
+        doc_types_text = ""
+        for dt in doc_types:
+            name = dt.get('name', dt.get('type_name', str(dt)))
+            doc_types_text += f"- {name}\n"
+        if not doc_types_text:
+            doc_types_text = "No document types found.\n"
+
+        # Replace template variables
+        prompt = base_prompt.replace('{{SERIES}}', series_text)
+        prompt = prompt.replace('{{FILES}}', files_text)
+        prompt = prompt.replace('{{TAGS}}', tags_text)
+        prompt = prompt.replace('{{DOCUMENT_TYPES}}', doc_types_text)
+
+        return prompt
+
+    async def chat(self, user_message: str) -> str:
+        """Process a user message and return the response."""
+
+        # Add user message to history
+        self.conversation_history.append({
+            "role": "user",
+            "content": user_message
+        })
+
+        # Keep conversation history manageable
+        if len(self.conversation_history) > 20:
+            self.conversation_history = self.conversation_history[-20:]
+
+        # Format tools for Bedrock Converse API
+        tool_config = {
+            "tools": [
+                {
+                    "toolSpec": {
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "inputSchema": {
+                            "json": tool["input_schema"]
+                        }
+                    }
+                }
+                for tool in self.tools
+            ]
+        }
+
+        # Format messages for Bedrock
+        messages = []
+        for msg in self.conversation_history:
+            messages.append({
+                "role": msg["role"],
+                "content": [{"text": msg["content"]}] if isinstance(msg["content"], str) else msg["content"]
+            })
+
+        # Build system prompt with dynamic context (cache it for this conversation)
+        system_prompt = await self._build_system_prompt()
+
+        # Call Bedrock with tools
+        response = self.llm.client.converse(
+            modelId=self.llm.model_id,
+            system=[{"text": system_prompt}],
+            messages=messages,
+            toolConfig=tool_config
+        )
+
+        # Process response - may need multiple rounds for tool calls
+        max_iterations = 5
+        iteration = 0
+
+        while iteration < max_iterations:
+            iteration += 1
+
+            output = response.get("output", {})
+            message = output.get("message", {})
+            content = message.get("content", [])
+            stop_reason = response.get("stopReason")
+
+            if self.verbose:
+                print(f"\n[Debug] Stop reason: {stop_reason}")
+
+            # Check if we need to handle tool use
+            tool_uses = [c for c in content if "toolUse" in c]
+
+            if not tool_uses:
+                # No tool calls, extract final text response
+                text_parts = [c.get("text", "") for c in content if "text" in c]
+                final_response = "\n".join(text_parts)
+
+                # Add assistant response to history
+                self.conversation_history.append({
+                    "role": "assistant",
+                    "content": final_response
+                })
+
+                return final_response
+
+            # Process tool calls
+            assistant_content = content
+            tool_results = []
+
+            for tool_use in tool_uses:
+                tu = tool_use["toolUse"]
+                tool_name = tu["name"]
+                tool_input = tu["input"]
+                tool_use_id = tu["toolUseId"]
+
+                if self.verbose:
+                    print(f"\n[Tool Call] {tool_name}: {json.dumps(tool_input)}")
+
+                # Execute the tool
+                result = await self.execute_tool(tool_name, tool_input)
+
+                if self.verbose:
+                    print(f"[Tool Result] {result[:200]}...")
+
+                tool_results.append({
+                    "toolResult": {
+                        "toolUseId": tool_use_id,
+                        "content": [{"text": result}]
+                    }
+                })
+
+            # Add assistant message with tool uses to messages
+            messages.append({
+                "role": "assistant",
+                "content": assistant_content
+            })
+
+            # Add tool results
+            messages.append({
+                "role": "user",
+                "content": tool_results
+            })
+
+            # Continue conversation with tool results
+            response = self.llm.client.converse(
+                modelId=self.llm.model_id,
+                system=[{"text": system_prompt}],
+                messages=messages,
+                toolConfig=tool_config
+            )
+
+        return "I apologize, but I wasn't able to complete the request. Please try rephrasing your question."
+
+    async def run_interactive(self):
+        """Run interactive chat loop."""
+        print("\n" + "=" * 60)
+        print("  ALFRD Chat - Query your documents with AI")
+        print("=" * 60)
+        print("\nType 'quit' or 'exit' to exit.")
+        print("Type 'clear' to clear conversation history.")
+        print("-" * 60 + "\n")
+
+        while True:
+            try:
+                user_input = input("\033[1;36mYou:\033[0m ").strip()
+
+                if not user_input:
+                    continue
+
+                if user_input.lower() in ('quit', 'exit', 'q'):
+                    print("\nGoodbye!")
+                    break
+
+                if user_input.lower() == 'clear':
+                    self.conversation_history = []
+                    print("\nConversation cleared.\n")
+                    continue
+
+                print()  # Blank line before response
+
+                response = await self.chat(user_input)
+                print(f"\033[1;32mALFRD:\033[0m {response}\n")
+
+            except KeyboardInterrupt:
+                print("\n\nGoodbye!")
+                break
+            except Exception as e:
+                print(f"\n\033[1;31mError:\033[0m {e}\n")
+                if self.verbose:
+                    import traceback
+                    traceback.print_exc()
+
+
+async def main():
+    parser = argparse.ArgumentParser(
+        description="ALFRD Chat - Query your documents with AI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    ./scripts/alfrd-chat
+    ./scripts/alfrd-chat --verbose
+
+Try asking:
+    "What series do I have?"
+    "Show me my PG&E bills"
+    "What was my highest utility bill?"
+    "Search for insurance documents"
+        """
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Show tool calls and debug info"
+    )
+    parser.add_argument(
+        "-q", "--query",
+        type=str,
+        help="Single query mode (non-interactive)"
+    )
+
+    args = parser.parse_args()
+
+    chat = ALFRDChat(verbose=args.verbose)
+
+    try:
+        await chat.initialize()
+
+        if args.query:
+            # Single query mode
+            response = await chat.chat(args.query)
+            print(response)
+        else:
+            # Interactive mode
+            await chat.run_interactive()
+    finally:
+        await chat.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

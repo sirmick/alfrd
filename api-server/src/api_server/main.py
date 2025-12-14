@@ -214,42 +214,43 @@ async def upload_image(file: UploadFile = File(...)):
     }
 
 
-@app.get("/api/v1/documents/search")
-async def search_documents(
+@app.get("/api/v1/search")
+async def search(
     q: str = Query(..., description="Search query string"),
-    limit: int = Query(50, ge=1, le=200, description="Number of results to return"),
+    limit: int = Query(20, ge=1, le=100, description="Number of results per type to return"),
+    include_documents: bool = Query(True, description="Include document results"),
+    include_files: bool = Query(True, description="Include file results"),
+    include_series: bool = Query(True, description="Include series results"),
     database: AlfrdDatabase = Depends(get_db)
 ):
     """
-    Full-text search across all documents.
-    
+    Unified search across documents, files, and series.
+
     Query Parameters:
         - q: Search query string (required)
-        - limit: Max number of results (1-200)
-    
+        - limit: Max number of results per type (1-100)
+        - include_documents: Include document results (default: true)
+        - include_files: Include file results (default: true)
+        - include_series: Include series results (default: true)
+
     Returns:
-        List of matching documents with relevance ranking
+        Results grouped by type (documents, files, series) with total count
     """
-    logger.info(f"GET /api/v1/documents/search - query={q}, limit={limit}")
+    logger.info(f"GET /api/v1/search - query={q}, limit={limit}")
     try:
-        # Perform full-text search
-        results = await database.search_documents(q, limit=limit)
-        
-        logger.info(f"Search returned {len(results)} results")
-        
-        # Normalize data for JSON serialization
-        for doc in results:
-            if doc.get('id'):
-                doc['id'] = str(doc['id'])
-        
-        return {
-            "results": results,
-            "count": len(results),
-            "query": q
-        }
-    
+        results = await database.search(
+            query=q,
+            limit=limit,
+            include_documents=include_documents,
+            include_files=include_files,
+            include_series=include_series
+        )
+
+        logger.info(f"Search returned {results['total_count']} total results")
+        return results
+
     except Exception as e:
-        logger.error(f"Error in search_documents: {str(e)}")
+        logger.error(f"Error in search: {str(e)}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Search error: {str(e)}")
 

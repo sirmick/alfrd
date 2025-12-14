@@ -517,7 +517,139 @@ class AlfrdDatabase:
             """, query, limit)
             
             return [dict(row) for row in rows]
-    
+
+    async def search(
+        self,
+        query: str,
+        limit: int = 50,
+        include_documents: bool = True,
+        include_files: bool = True,
+        include_series: bool = True
+    ) -> Dict[str, Any]:
+        """Unified search across documents, files, and series.
+
+        Args:
+            query: Search query string
+            limit: Maximum number of results per type
+            include_documents: Include document results
+            include_files: Include file results
+            include_series: Include series results
+
+        Returns:
+            Dict with documents, files, and series results
+        """
+        await self.initialize()
+
+        results = {
+            "query": query,
+            "documents": [],
+            "files": [],
+            "series": []
+        }
+
+        # Prepare query for tsquery (handle simple word search)
+        # Convert "word1 word2" to "word1 & word2" for AND search
+        search_terms = query.strip().split()
+        if len(search_terms) > 1:
+            ts_query = " & ".join(search_terms)
+        else:
+            ts_query = query.strip()
+
+        async with self.pool.acquire() as conn:
+            # Search documents
+            if include_documents:
+                doc_rows = await conn.fetch("""
+                    SELECT d.id, d.filename, d.document_type, d.status,
+                           d.created_at, d.summary,
+                           ts_rank(d.extracted_text_tsv, to_tsquery('english', $1)) as rank
+                    FROM documents d
+                    WHERE d.extracted_text_tsv @@ to_tsquery('english', $1)
+                       OR d.summary ILIKE '%' || $2 || '%'
+                       OR d.filename ILIKE '%' || $2 || '%'
+                    ORDER BY rank DESC NULLS LAST
+                    LIMIT $3
+                """, ts_query, query, limit)
+
+                results["documents"] = [
+                    {
+                        "id": str(row["id"]),
+                        "type": "document",
+                        "filename": row["filename"],
+                        "document_type": row["document_type"],
+                        "status": row["status"],
+                        "summary": row["summary"],
+                        "created_at": str(row["created_at"]) if row["created_at"] else None,
+                        "rank": float(row["rank"]) if row["rank"] else 0
+                    }
+                    for row in doc_rows
+                ]
+
+            # Search files (by tags and summary)
+            if include_files:
+                file_rows = await conn.fetch("""
+                    SELECT DISTINCT f.id, f.document_count, f.status, f.summary_text,
+                           f.first_document_date, f.last_document_date,
+                           array_agg(DISTINCT t.tag_name) FILTER (WHERE t.tag_name IS NOT NULL) as tags
+                    FROM files f
+                    LEFT JOIN file_tags ft ON f.id = ft.file_id
+                    LEFT JOIN tags t ON ft.tag_id = t.id
+                    WHERE f.summary_text ILIKE '%' || $1 || '%'
+                       OR t.tag_name ILIKE '%' || $1 || '%'
+                    GROUP BY f.id
+                    LIMIT $2
+                """, query, limit)
+
+                results["files"] = [
+                    {
+                        "id": str(row["id"]),
+                        "type": "file",
+                        "tags": row["tags"] or [],
+                        "document_count": row["document_count"],
+                        "status": row["status"],
+                        "summary": (row["summary_text"] or "")[:200],
+                        "first_document_date": str(row["first_document_date"]) if row["first_document_date"] else None,
+                        "last_document_date": str(row["last_document_date"]) if row["last_document_date"] else None
+                    }
+                    for row in file_rows
+                ]
+
+            # Search series (by entity, title, description)
+            if include_series:
+                series_rows = await conn.fetch("""
+                    SELECT id, entity, title, series_type, frequency,
+                           description, document_count, status
+                    FROM series
+                    WHERE entity ILIKE '%' || $1 || '%'
+                       OR title ILIKE '%' || $1 || '%'
+                       OR description ILIKE '%' || $1 || '%'
+                       OR series_type ILIKE '%' || $1 || '%'
+                    LIMIT $2
+                """, query, limit)
+
+                results["series"] = [
+                    {
+                        "id": str(row["id"]),
+                        "type": "series",
+                        "entity": row["entity"],
+                        "title": row["title"],
+                        "series_type": row["series_type"],
+                        "frequency": row["frequency"],
+                        "description": row["description"],
+                        "document_count": row["document_count"],
+                        "status": row["status"]
+                    }
+                    for row in series_rows
+                ]
+
+        # Calculate totals
+        results["total_count"] = (
+            len(results["documents"]) +
+            len(results["files"]) +
+            len(results["series"])
+        )
+
+        return results
+
     async def get_documents_by_tags(
         self,
         document_type: str = None,
