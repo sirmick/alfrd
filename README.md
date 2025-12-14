@@ -141,60 +141,44 @@ Series Summarize → Series-specific extraction (SERIES_SUMMARIZED)
 
 ## Key Features
 
-### ✅ Phase 1C Complete + Series Schema Stability (2025-12-12)
+### 🧠 AI-Powered Processing
+- **🤖 Self-improving prompts** - Classifier, summarizer, and series prompts evolve based on quality
+- **🔮 Dynamic classification** - LLM can suggest new document types automatically
+- **📝 Type-specific summarization** - DB-driven, customizable per document type
+- **🎯 Series-specific extraction** - Each document series gets consistent field names
+- **⚡ Nova Lite inference** - Fast, cost-effective AWS Bedrock processing
 
-- **🧠 Self-improving prompts** - Classifier, summarizer, and series prompts evolve based on quality
-- **📋 Series-specific extraction** - Each document series gets consistent field names
-- **🔒 PostgreSQL advisory locks** - Prevent race conditions in concurrent processing
-- **📊 Event logging system** - Comprehensive debugging with `./scripts/view-events`
+### 📄 Document Processing
+- **👁️ AWS Textract OCR** - 95%+ accuracy with block-level data preservation
+- **📦 Multi-page support** - Process multiple images as single document
+- **🏷️ Flexible tagging** - Secondary tags for rich classification
+- **📂 Series detection** - Automatic grouping of recurring documents
 - **♻️ Series regeneration** - All documents updated when series prompt improves
-- **🔄 Dynamic classification** - LLM can suggest new document types
-- **📊 Generic workflow** - No hardcoded handlers, all DB-driven
-- **🎯 Scorer workers** - Evaluate classifier/summarizer performance (background)
-- **🏷️ Secondary tags** - Flexible classification via tags table
-- **📝 Prompt versioning** - All prompt changes tracked with version history
-- **♻️ Recovery mechanisms** - Automatic retry and stale work detection
-- **Asyncio orchestration** - Simple semaphore-based concurrency control
-- **OCR step** - AWS Textract OCR with 95%+ accuracy
-- **Classify step** - DB-driven classification with Bedrock LLM
-- **Summarize step** - Type-specific DB-driven summarization
-- **File step** - Automatic series detection and filing
-- **Series summarize step** - Entity-specific extraction with schema enforcement
-- **Complete step** - Final status updates
-- **Folder-based document input** with `meta.json` metadata
-- **Block-level data preservation** (PAGE, LINE, WORD with bounding boxes)
-- **Multi-document folders** (process multiple images as single document)
-- **PostgreSQL storage** with full-text search and structured data
-- **LLM-optimized format** for AI processing with spatial reasoning
-- **Comprehensive logging** with timestamps
-- **Test suite** with pytest (20/20 PostgreSQL tests passing)
-- **Standalone execution** (no PYTHONPATH setup needed)
 
-### ✅ Phase 2A - PWA Integration (90% Complete)
+### 🔧 Robust Architecture
+- **⚙️ Asyncio orchestration** - Semaphore-based concurrency control
+- **🔒 PostgreSQL advisory locks** - Prevent race conditions in concurrent processing
+- **🔄 Automatic recovery** - Retry on failure (max 3 attempts) + stale work detection
+- **📊 Event logging system** - Comprehensive debugging with `./scripts/view-events`
+- **📈 Prompt versioning** - All prompt changes tracked with version history
 
-- ✅ **PWA interface** - Ionic React with 3 functional pages
-- ✅ **Camera capture** - Capacitor Camera API integrated
-- ✅ **Image upload** - POST to /api/v1/upload-image endpoint
-- ✅ **Document list** - Real-time data from API with manual refresh
-- ✅ **Document detail** - Full metadata, OCR text, structured data display
-- ⏳ **Auto-polling** - Automatic status updates (currently manual refresh)
+### 📱 Web Interface (PWA)
+- **📷 Camera capture** - Take photos directly from mobile devices
+- **📋 Document list** - Real-time data from API with refresh
+- **🔍 Document detail** - Full metadata, OCR text, structured data display
+- **📊 Data tables** - Flattened JSONB visualization
 
-### ✅ Phase 2B - JSON Data Extraction (Complete)
+### 🗄️ Data & Storage
+- **🐘 PostgreSQL** - Full-text search and structured JSONB data
+- **📐 JSON flattening** - Convert nested data to flat tables with 4 array strategies
+- **📤 CSV export** - CLI tool for data extraction and analysis
+- **🔗 LLM-optimized format** - Combined text + block-level structure for spatial reasoning
 
-- ✅ **JSON flattening utility** - Convert nested JSONB to pandas DataFrames
-- ✅ **CLI tool** - `analyze-file-data` for data extraction and CSV export
-- ✅ **API endpoint** - `/api/v1/files/{file_id}/flatten` for UI integration
-- ✅ **UI component** - DataTable for displaying flattened data in file view
-- ✅ **Array strategies** - Multiple approaches (flatten, json, first, count)
-- ✅ **Comprehensive tests** - 25+ test cases for all flattening scenarios
-
-### ⏳ Phase 3 - Coming Soon
-
-- Hierarchical summaries (weekly → monthly → yearly)
-- Financial tracking with advanced analytics
-- Integration tests for full pipeline
-- Real-time file watching (watchdog)
-- Analytics dashboard
+### ✅ Testing & Quality
+- **🧪 113+ tests** - Comprehensive pytest suite
+- **🔬 Workflow tests** - End-to-end scenarios with real data
+- **🛡️ Database tests** - Direct PostgreSQL operation validation
+- **📊 API tests** - FastAPI endpoint coverage
 
 ## Project Structure
 
@@ -372,60 +356,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))  # src directory
 
 No wrapper scripts or environment setup needed!
 
-## Roadmap
-
-### Phase 1A: Core Document Processing ✅
-- [x] Folder-based document input
-- [x] AWS Textract OCR
-- [x] LLM-optimized output format
-- [x] PostgreSQL storage
-- [x] Test suite
-- [x] Helper scripts
-
-### Phase 1B: Asyncio Orchestration ✅
-- [x] Simple asyncio orchestrator with semaphore concurrency
-- [x] OCR step with AWS Textract
-- [x] Classify step with Bedrock LLM
-- [x] Type-specific summarization
-- [x] MCP tools as library functions
-- [x] BedrockClient for AWS Bedrock API
-- [x] Automatic retry and recovery mechanisms
-- [x] Periodic stale work detection
-
-### Phase 1C: Self-Improving Prompts ✅
-- [x] Prompts table for classifier and summarizers
-- [x] Classification suggestions table
-- [x] Document types table (dynamic)
-- [x] Score classification step with prompt evolution
-- [x] Score summary step with prompt evolution
-- [x] Generic summarize step (DB-driven)
-- [x] Dynamic classification with new type suggestions
-- [x] Tags system for flexible classification
-- [x] Prompt versioning and performance tracking
-- [x] Default prompts initialization
-- [x] Series-based filing with hybrid tag approach
-
-### Phase 2A: PWA Interface (90% Complete)
-- [x] Ionic PWA with camera capture
-- [x] Image upload API endpoint
-- [x] Mobile photo workflow (camera → upload → API)
-- [x] Document list page with API integration
-- [x] Document detail page with full metadata
-- [ ] Automatic status polling (manual refresh works)
-- [ ] End-to-end integration tests
-
-### Phase 3: Analytics & UI
-- [ ] Hierarchical summaries
-- [ ] Financial tracking
-- [ ] Web UI
-- [ ] Real-time file watching
-
-### Phase 4: Production
-- [ ] Multi-user support
-- [ ] API authentication
-- [ ] Container deployment
-- [ ] Backup/restore
-
 ## Technical Details
 
 ### Technologies
@@ -452,25 +382,20 @@ See `api-server/src/api_server/db/schema.sql` for complete schema.
 
 ## Statistics
 
-- **Lines of Code**: ~8,000+ lines (orchestrator + tasks + MCP tools + API + Web UI + events)
-- **Test Coverage**: 20/20 PostgreSQL tests passing + integration tests
-- **OCR Accuracy**: 95%+ with AWS Textract
-- **Processing Speed**: ~2-3 seconds per page
-- **Orchestration**: Simple asyncio with semaphore-based concurrency control
-- **Recovery**: Automatic retry (3 attempts) + periodic stale work detection (5 min)
-- **MCP Integration**: Bedrock with Amazon Nova Lite (library functions, not server)
-- **Prompt Evolution**: Enabled with threshold=0.05 (configure via PROMPT_UPDATE_THRESHOLD)
-- **Series Prompts**: One per series for schema-consistent extraction
-- **Document Types**: 6 default types (bill, finance, school, event, junk, generic) + unlimited LLM-suggested types
-- **API Endpoints**: 30+ endpoints (health, documents, files, series, tags, prompts, events)
-- **Event Logging**: Full audit trail with `./scripts/view-events`
-- **Web UI**: Ionic React PWA with data visualization
-  - **CapturePage** (166 lines) - Camera capture, photo preview, upload
-  - **DocumentsPage** (192 lines) - Document list with API integration
-  - **DocumentDetailPage** (348 lines) - Full document details and metadata
-  - **FileDetailPage** - File view with flattened data table
-  - **DataTable Component** - Responsive table for flattened JSONB data
-- **Data Analysis**: JSON flattening utility with 4 array strategies and pandas integration
+- **📏 Lines of Code**: ~8,000+ lines (orchestrator + tasks + MCP tools + API + Web UI + events)
+- **🧪 Test Coverage**: 113+ tests passing (database, API, workflow, locks)
+- **👁️ OCR Accuracy**: 95%+ with AWS Textract
+- **⚡ Processing Speed**: ~2-3 seconds per page
+- **⚙️ Orchestration**: Simple asyncio with semaphore-based concurrency control
+- **🔄 Recovery**: Automatic retry (3 attempts) + periodic stale work detection (5 min)
+- **🤖 LLM Integration**: AWS Bedrock with Amazon Nova Lite
+- **📈 Prompt Evolution**: Enabled with threshold=0.05 (configure via PROMPT_UPDATE_THRESHOLD)
+- **📂 Series Prompts**: One per series for schema-consistent extraction
+- **🏷️ Document Types**: 6 default types + unlimited LLM-suggested types
+- **🔗 API Endpoints**: 30+ endpoints (health, documents, files, series, tags, prompts, events)
+- **📊 Event Logging**: Full audit trail with `./scripts/view-events`
+- **📱 Web UI**: Ionic React PWA with data visualization
+- **📐 Data Analysis**: JSON flattening utility with 4 array strategies and pandas integration
 
 ## Contributing
 

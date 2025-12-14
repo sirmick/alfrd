@@ -422,15 +422,31 @@ docker-compose -f docker/docker-compose.yml logs -f
 ### Testing
 
 ```bash
-# Run all tests
+# Run all tests (recommended)
+./scripts/run-tests -v
+
+# Or use pytest directly
 pytest -v
 
-# Run database tests
-pytest shared/tests/test_database.py -v
+# Run specific test modules
+./scripts/run-tests shared/tests/test_database.py -v           # Database operations
+./scripts/run-tests shared/tests/test_json_flattener.py -v     # JSON utilities
+./scripts/run-tests api-server/tests/test_api_readonly.py -v   # API endpoints
+./scripts/run-tests document-processor/tests/test_locks.py -v  # Advisory locks
 
-# Test complete pipeline
-./samples/test-pipeline.sh
+# Run workflow tests only (requires test data in database)
+./scripts/run-tests api-server/tests/test_api_readonly.py -v -k "Workflow"
+
+# Test with coverage
+./scripts/run-tests --cov=shared --cov=api_server -v
 ```
+
+**Test Categories:**
+- **Database tests** - Direct PostgreSQL operations (CRUD, prompts, events)
+- **JSON flattening tests** - Nested data → flat table conversion
+- **API tests** - FastAPI endpoint validation (113+ tests)
+- **Workflow tests** - End-to-end scenarios with real data
+- **Lock tests** - PostgreSQL advisory lock behavior
 
 ---
 

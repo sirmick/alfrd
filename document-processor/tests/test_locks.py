@@ -2,7 +2,15 @@
 
 import pytest
 import asyncio
+import sys
+from pathlib import Path
 from uuid import uuid4
+
+# Add paths for imports
+project_root = str(Path(__file__).parent.parent.parent)
+doc_processor_src = str(Path(__file__).parent.parent / "src")
+sys.path.insert(0, project_root)
+sys.path.insert(0, doc_processor_src)
 
 from shared.database import AlfrdDatabase
 from shared.config import Settings

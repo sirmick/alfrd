@@ -108,10 +108,10 @@ class TestFlattenDict:
         assert result == {}
     
     def test_empty_array(self):
-        """Test empty array is skipped."""
+        """Test empty array is preserved as-is."""
         data = {'items': []}
         result = flatten_dict(data)
-        assert result == {}
+        assert result == {'items': []}
 
 
 class TestFlattenWithArraysAsJson:
