@@ -10,7 +10,7 @@ import re
 from typing import Dict, Any, Optional
 from pathlib import Path
 
-from mcp_server.llm import BedrockClient
+from mcp_server.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def summarize_document_dynamic(
     document_type: str,
     summarizer_prompt: str,
     llm_data: Optional[Dict[str, Any]],
-    bedrock_client: BedrockClient,
+    llm_client: LLMClient,
 ) -> Dict[str, Any]:
     """
     Summarize a document using a dynamic DB-stored prompt.
@@ -32,7 +32,7 @@ def summarize_document_dynamic(
         document_type: Type of document (bill, finance, etc.)
         summarizer_prompt: The summarization prompt from database
         llm_data: Optional LLM-optimized JSON with block-level data
-        bedrock_client: Initialized BedrockClient instance
+        llm_client: Initialized LLMClient instance
         
     Returns:
         Dict with structured data extracted from the document
@@ -74,7 +74,7 @@ def summarize_document_dynamic(
         # Invoke Bedrock with low temperature for accurate extraction
         logger.debug(f"Summarizing {filename} (type: {document_type})")
         
-        response = bedrock_client.invoke_with_system_and_user(
+        response = llm_client.invoke_with_system_and_user(
             system="You are a document extraction expert. Extract structured data accurately from documents.",
             user_message=user_message,
             temperature=0.1,

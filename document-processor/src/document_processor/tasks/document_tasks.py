@@ -12,7 +12,7 @@ from shared.database import AlfrdDatabase
 from shared.types import DocumentStatus, PromptType
 from shared.config import Settings
 from shared.event_logger import EventLogger, get_event_logger
-from mcp_server.llm.bedrock import BedrockClient
+from mcp_server.llm.client import LLMClient
 from document_processor.utils.locks import document_type_lock, series_prompt_lock
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ _settings = Settings()
 # Asyncio semaphores for concurrency enforcement (works without Prefect Server)
 # These ensure limits are respected even in standalone/dev mode
 # Configured via environment variables
-_textract_semaphore = asyncio.Semaphore(_settings.prefect_textract_workers)
+_ocr_semaphore = asyncio.Semaphore(_settings.prefect_textract_workers)
 _bedrock_semaphore = asyncio.Semaphore(_settings.prefect_bedrock_workers)
 _file_gen_semaphore = asyncio.Semaphore(_settings.prefect_file_generation_workers)
 
@@ -34,17 +34,32 @@ _file_gen_semaphore = asyncio.Semaphore(_settings.prefect_file_generation_worker
 
 async def ocr_step(doc_id: UUID, db: AlfrdDatabase) -> str:
     """
-    Extract text using AWS Textract.
-    
+    Extract text using configured OCR provider (Textract or Tesseract).
+
     Limited to 3 concurrent executions via asyncio semaphore.
     """
-    async with _textract_semaphore:
+    async with _ocr_semaphore:
         return await _ocr_task_impl(doc_id, db)
+
+
+def _get_ocr_extractor():
+    """Get the configured OCR extractor based on settings."""
+    settings = Settings()
+    ocr_provider = settings.ocr_provider.lower()
+
+    if ocr_provider == "tesseract":
+        from document_processor.extractors.tesseract_ocr import TesseractExtractor
+        logger.info(f"Using OCR provider: tesseract (lang={settings.tesseract_lang})")
+        return TesseractExtractor()
+    else:
+        # Default to Textract
+        from document_processor.extractors.aws_textract import TextractExtractor
+        logger.info("Using OCR provider: textract (AWS)")
+        return TextractExtractor()
 
 
 async def _ocr_task_impl(doc_id: UUID, db: AlfrdDatabase) -> str:
     """Implementation of OCR task (extracted for semaphore wrapping)."""
-    from document_processor.extractors.aws_textract import TextractExtractor
     from document_processor.extractors.text import TextExtractor
     from shared.constants import META_JSON_FILENAME
     from shared.database import utc_now
@@ -107,9 +122,9 @@ async def _ocr_task_impl(doc_id: UUID, db: AlfrdDatabase) -> str:
             
             # Extract based on type
             if file_type == 'image':
-                extractor = TextractExtractor()
+                extractor = _get_ocr_extractor()
                 extracted = await extractor.extract_text(file_path)
-                # Cache status logged in aws_clients.py
+                # Cache status logged in extractor
             elif file_type == 'text':
                 extractor = TextExtractor()
                 extracted = await extractor.extract_text(file_path)
@@ -180,15 +195,17 @@ async def _ocr_task_impl(doc_id: UUID, db: AlfrdDatabase) -> str:
         text_file = text_path / f"{doc_id}.txt"
         text_file.write_text(full_text)
         
-        # Update database
+        # Update database with OCR provider in log
+        settings = Settings()
         await db.update_document(
             doc_id=doc_id,
             extracted_text=full_text,
             extracted_text_path=str(text_file),
-            status=DocumentStatus.OCR_COMPLETED
+            status=DocumentStatus.OCR_COMPLETED,
+            _extra_log={'ocr_provider': settings.ocr_provider}
         )
 
-        # Log OCR completion event
+        # Log OCR completion event (to database)
         await event_logger.log_state_change(
             entity_type='document',
             entity_id=doc_id,
@@ -198,7 +215,8 @@ async def _ocr_task_impl(doc_id: UUID, db: AlfrdDatabase) -> str:
             details={
                 'text_length': len(full_text),
                 'avg_confidence': avg_confidence,
-                'document_count': len(all_extracted)
+                'document_count': len(all_extracted),
+                'ocr_provider': settings.ocr_provider
             }
         )
 
@@ -233,18 +251,18 @@ async def classify_step(
     doc_id: UUID,
     extracted_text: str,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> Dict[str, Any]:
     """Classify document using Bedrock LLM."""
     async with _bedrock_semaphore:
-        return await _classify_task_impl(doc_id, extracted_text, db, bedrock_client)
+        return await _classify_task_impl(doc_id, extracted_text, db, llm_client)
 
 
 async def _classify_task_impl(
     doc_id: UUID,
     extracted_text: str,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> Dict[str, Any]:
     """Implementation of classify task (extracted for semaphore wrapping)."""
     from mcp_server.tools.classify_dynamic import classify_document_dynamic
@@ -279,7 +297,7 @@ async def _classify_task_impl(
             prompt['prompt_text'],
             known_types,
             existing_tags,
-            bedrock_client
+            llm_client
         )
         latency_ms = int((time.time() - start_time) * 1000)
 
@@ -288,7 +306,7 @@ async def _classify_task_impl(
             entity_type='document',
             entity_id=doc_id,
             event_type='llm_classify',
-            model=bedrock_client.model_id,
+            model=llm_client.model_id,
             prompt=prompt['prompt_text'][:2000],  # Truncate for storage
             response=json.dumps(classification),
             latency_ms=latency_ms,
@@ -383,7 +401,7 @@ async def _classify_task_impl(
 async def summarize_step(
     doc_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> str:
     """
     Summarize document with PostgreSQL advisory lock serialization.
@@ -392,13 +410,13 @@ async def summarize_step(
     to prevent prompt evolution conflicts.
     """
     async with _bedrock_semaphore:
-        return await _summarize_task_impl(doc_id, db, bedrock_client)
+        return await _summarize_task_impl(doc_id, db, llm_client)
 
 
 async def _summarize_task_impl(
     doc_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> str:
     """Implementation of summarize task (extracted for semaphore wrapping)."""
     event_logger = get_event_logger(db)
@@ -484,7 +502,7 @@ Focus on dates, amounts, names, and other relevant details."""
                 document_type,
                 prompt['prompt_text'],
                 llm_data,
-                bedrock_client
+                llm_client
             )
             latency_ms = int((time.time() - start_time) * 1000)
 
@@ -493,7 +511,7 @@ Focus on dates, amounts, names, and other relevant details."""
                 entity_type='document',
                 entity_id=doc_id,
                 event_type='llm_summarize',
-                model=bedrock_client.model_id,
+                model=llm_client.model_id,
                 prompt=prompt['prompt_text'][:2000],  # Truncate for storage
                 response=json.dumps(summary_result)[:5000],  # Truncate response
                 latency_ms=latency_ms,
@@ -551,18 +569,18 @@ async def score_classification_step(
     doc_id: UUID,
     classification: Dict[str, Any],
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> float:
     """Score classification quality and update prompt if improved."""
     async with _bedrock_semaphore:
-        return await _score_classification_task_impl(doc_id, classification, db, bedrock_client)
+        return await _score_classification_task_impl(doc_id, classification, db, llm_client)
 
 
 async def _score_classification_task_impl(
     doc_id: UUID,
     classification: Dict[str, Any],
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> float:
     """Implementation of score classification task (extracted for semaphore wrapping)."""
     from mcp_server.tools.score_performance import score_classification
@@ -620,7 +638,7 @@ async def _score_classification_task_impl(
             score_classification,
             document_info,
             prompt['prompt_text'],
-            bedrock_client
+            llm_client
         )
         
         # Check score ceiling (stop evolution if reached)
@@ -653,7 +671,7 @@ async def _score_classification_task_impl(
                 score_result.get('feedback', ''),
                 score_result.get('suggested_improvements', ''),
                 300,  # max_words
-                bedrock_client
+                llm_client
             )
             
             await db.deactivate_old_prompts(PromptType.CLASSIFIER)
@@ -688,17 +706,17 @@ async def _score_classification_task_impl(
 async def score_summary_step(
     doc_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> float:
     """Score summary quality and update prompt if improved."""
     async with _bedrock_semaphore:
-        return await _score_summary_task_impl(doc_id, db, bedrock_client)
+        return await _score_summary_task_impl(doc_id, db, llm_client)
 
 
 async def _score_summary_task_impl(
     doc_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> float:
     """Implementation of score summary task (extracted for semaphore wrapping)."""
     from mcp_server.tools.score_performance import score_summarization
@@ -745,7 +763,7 @@ async def _score_summary_task_impl(
             score_summarization,
             document_info,
             prompt['prompt_text'],
-            bedrock_client
+            llm_client
         )
         
         # Check score ceiling (0.95 for generic summarizer)
@@ -774,7 +792,7 @@ async def _score_summary_task_impl(
                 score_result.get('feedback', ''),
                 score_result.get('suggested_improvements', ''),
                 None,  # max_words (None for summarizer)
-                bedrock_client
+                llm_client
             )
             
             await db.deactivate_old_prompts(PromptType.SUMMARIZER, document_type)
@@ -811,7 +829,7 @@ async def _score_summary_task_impl(
 async def file_step(
     doc_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> UUID:
     """Detect series, create file, add tags."""
     from mcp_server.tools.detect_series import detect_series_with_retry
@@ -850,7 +868,7 @@ async def file_step(
             document_type=doc['document_type'],
             structured_data=structured_data,
             tags=tags,
-            bedrock_client=bedrock_client,
+            llm_client=llm_client,
             series_prompt=series_prompt['prompt_text'],
             existing_series=existing_series
         )
@@ -861,7 +879,7 @@ async def file_step(
             entity_type='document',
             entity_id=doc_id,
             event_type='llm_series_detect',
-            model=bedrock_client.model_id,
+            model=llm_client.model_id,
             prompt=series_prompt['prompt_text'][:2000],
             response=json.dumps(series_data),
             latency_ms=latency_ms,
@@ -963,17 +981,17 @@ async def file_step(
 async def generate_file_summary_step(
     file_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> str:
     """Generate summary for file collection."""
     async with _file_gen_semaphore:
-        return await _generate_file_summary_task_impl(file_id, db, bedrock_client)
+        return await _generate_file_summary_task_impl(file_id, db, llm_client)
 
 
 async def _generate_file_summary_task_impl(
     file_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> str:
     """Implementation of file summary generation task (extracted for semaphore wrapping)."""
     from mcp_server.tools.summarize_file import summarize_file
@@ -1043,7 +1061,7 @@ async def _generate_file_summary_task_impl(
                 None,  # file_type (deprecated)
                 file.get('tags', []),  # tags (ensure it's a list)
                 "",  # prompt (empty string for default)
-                bedrock_client,
+                llm_client,
                 None  # flattened_table (will be auto-generated)
             )
             latency_ms = int((time.time() - start_time) * 1000)
@@ -1054,7 +1072,7 @@ async def _generate_file_summary_task_impl(
                 entity_type='file',
                 entity_id=file_id,
                 event_type='llm_file_summarize',
-                model=bedrock_client.model_id,
+                model=llm_client.model_id,
                 prompt=f"Summarize file with {len(content_parts)} documents",
                 response=summary.get('summary', '')[:5000],
                 latency_ms=latency_ms,
@@ -1117,20 +1135,20 @@ async def _generate_file_summary_task_impl(
 async def series_summarize_step(
     doc_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> Dict[str, Any]:
     """
     Summarize document with series-specific prompt.
     This runs AFTER file_step() assigns the document to a series.
     """
     async with _bedrock_semaphore:
-        return await _series_summarize_task_impl(doc_id, db, bedrock_client)
+        return await _series_summarize_task_impl(doc_id, db, llm_client)
 
 
 async def _series_summarize_task_impl(
     doc_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> Dict[str, Any]:
     """Implementation of series summarize task."""
     from mcp_server.tools.summarize_series import (
@@ -1212,7 +1230,7 @@ async def _series_summarize_task_impl(
                         series['entity'],
                         series['series_type'],
                         doc['extracted_text'],
-                        bedrock_client
+                        llm_client
                     )
 
                     # Save as new prompt in prompts table
@@ -1268,7 +1286,7 @@ async def _series_summarize_task_impl(
             doc['extracted_text'],
             series_prompt['prompt_text'],
             schema_def,
-            bedrock_client
+            llm_client
         )
         latency_ms = int((time.time() - start_time) * 1000)
 
@@ -1277,7 +1295,7 @@ async def _series_summarize_task_impl(
             entity_type='document',
             entity_id=doc_id,
             event_type='llm_series_summarize',
-            model=bedrock_client.model_id,
+            model=llm_client.model_id,
             prompt=series_prompt['prompt_text'][:2000],
             response=json.dumps(series_extraction)[:5000],
             latency_ms=latency_ms,
@@ -1332,17 +1350,17 @@ async def _series_summarize_task_impl(
 async def score_series_extraction_step(
     doc_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> float:
     """Score series extraction quality and evolve series prompt if improved."""
     async with _bedrock_semaphore:
-        return await _score_series_extraction_task_impl(doc_id, db, bedrock_client)
+        return await _score_series_extraction_task_impl(doc_id, db, llm_client)
 
 
 async def _score_series_extraction_task_impl(
     doc_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> float:
     """Implementation of score series extraction task."""
     from mcp_server.tools.score_performance import score_summarization, evolve_prompt
@@ -1392,7 +1410,7 @@ async def _score_series_extraction_task_impl(
             score_summarization,
             document_info,
             series_prompt['prompt_text'],
-            bedrock_client
+            llm_client
         )
         
         # Check if prompt can evolve
@@ -1435,7 +1453,7 @@ async def _score_series_extraction_task_impl(
                 score_result.get('feedback', ''),
                 score_result.get('suggested_improvements', ''),
                 None,  # max_words (None for series summarizer)
-                bedrock_client
+                llm_client
             )
             
             # Deactivate ALL old prompts for this series before creating new one

@@ -28,7 +28,7 @@ import pandas as pd
 from shared.database import AlfrdDatabase
 from shared.config import Settings
 from shared.json_flattener import flatten_dict
-from mcp_server.llm.bedrock import BedrockClient
+from mcp_server.llm.client import LLMClient
 
 
 class ALFRDChat:
@@ -38,7 +38,7 @@ class ALFRDChat:
         self.verbose = verbose
         self.settings = Settings()
         self.db: Optional[AlfrdDatabase] = None
-        self.llm: Optional[BedrockClient] = None
+        self.llm: Optional[LLMClient] = None
         self.conversation_history: List[Dict[str, str]] = []
 
         # Tool definitions for the LLM
@@ -263,7 +263,7 @@ class ALFRDChat:
         """Initialize database and LLM connections."""
         self.db = AlfrdDatabase(self.settings.database_url)
         await self.db.initialize()
-        self.llm = BedrockClient()
+        self.llm = LLMClient()
 
     async def close(self):
         """Close connections."""

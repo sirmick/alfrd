@@ -39,10 +39,32 @@ class Settings(BaseSettings):
     api_port: int = 8000
     mcp_port: int = 3000
     
-    # Bedrock Configuration
+    # LLM Provider Configuration
+    # Options: "bedrock", "lmstudio", "openai"
+    llm_provider: str = "bedrock"
+
+    # Bedrock Configuration (when llm_provider = "bedrock")
     # bedrock_model_id: str = "anthropic.claude-3-5-sonnet-20241022-v2:0"  # Requires authorization
     bedrock_model_id: str = "us.amazon.nova-lite-v1:0"  # Using Nova Lite inference profile
     bedrock_max_tokens: int = 4096
+
+    # LM Studio Configuration (when llm_provider = "lmstudio")
+    # LM Studio runs locally and provides an OpenAI-compatible API
+    lmstudio_base_url: str = "http://localhost:1234/v1"
+    lmstudio_model: str = "local-model"  # Model name loaded in LM Studio
+
+    # OpenAI Configuration (when llm_provider = "openai")
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4o-mini"
+
+    # OCR Provider Configuration
+    # Options: "textract", "tesseract"
+    ocr_provider: str = "textract"
+
+    # Tesseract Configuration (when ocr_provider = "tesseract")
+    tesseract_cmd: str = ""  # Path to tesseract binary (empty = use system default)
+    tesseract_lang: str = "eng"  # Language model (e.g., "eng", "eng+fra")
     
     # Prefect Worker Pool Configuration
     # Max concurrent document processing flows

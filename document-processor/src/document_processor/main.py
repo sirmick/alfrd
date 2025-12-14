@@ -42,12 +42,25 @@ async def main(run_once: bool = False, doc_id: str = None):
     print("=" * 80)
     print()
     
+    print(f"📋 Providers:")
+    print(f"   LLM Provider: {settings.llm_provider}")
+    if settings.llm_provider == "lmstudio":
+        print(f"   LM Studio URL: {settings.lmstudio_base_url}")
+    elif settings.llm_provider == "openai":
+        print(f"   OpenAI Model: {settings.openai_model}")
+    else:
+        print(f"   Bedrock Model: {settings.bedrock_model_id}")
+    print(f"   OCR Provider: {settings.ocr_provider}")
+    if settings.ocr_provider == "tesseract":
+        print(f"   Tesseract Lang: {settings.tesseract_lang}")
+    print()
+
     print(f"📊 Concurrency Limits:")
     print(f"   Max Threads: {settings.prefect_max_threads}")
     print(f"   Document Flows: {settings.prefect_max_document_flows} concurrent")
     print(f"   File Flows: {settings.prefect_max_file_flows} concurrent")
-    print(f"   Textract Tasks: {settings.prefect_textract_workers} concurrent")
-    print(f"   Bedrock Tasks: {settings.prefect_bedrock_workers} concurrent")
+    print(f"   OCR Tasks: {settings.prefect_textract_workers} concurrent")
+    print(f"   LLM Tasks: {settings.prefect_bedrock_workers} concurrent")
     print(f"   File Generation Tasks: {settings.prefect_file_generation_workers} concurrent")
     print()
     

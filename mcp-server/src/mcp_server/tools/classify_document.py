@@ -5,7 +5,7 @@ import logging
 from typing import Dict, Any
 
 from shared.types import ClassificationResult, DocumentType
-from mcp_server.llm import BedrockClient
+from mcp_server.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ Respond ONLY with valid JSON in this exact format:
 def classify_document(
     extracted_text: str,
     filename: str,
-    bedrock_client: BedrockClient,
+    llm_client: LLMClient,
 ) -> ClassificationResult:
     """
     Classify a document using AWS Bedrock.
@@ -40,7 +40,7 @@ def classify_document(
     Args:
         extracted_text: Text extracted from the document
         filename: Original filename for context
-        bedrock_client: Initialized BedrockClient instance
+        llm_client: Initialized LLMClient instance
         
     Returns:
         ClassificationResult with type, confidence, and reasoning
@@ -60,7 +60,7 @@ Classify this document as junk, bill, or finance. Respond with JSON only."""
     
     try:
         # Invoke Bedrock with low temperature for consistent classification
-        response = bedrock_client.invoke_with_system_and_user(
+        response = llm_client.invoke_with_system_and_user(
             system=CLASSIFICATION_SYSTEM_PROMPT,
             user_message=user_message,
             temperature=0.0,
@@ -116,7 +116,7 @@ Classify this document as junk, bill, or finance. Respond with JSON only."""
 def classify_document_with_retry(
     extracted_text: str,
     filename: str,
-    bedrock_client: BedrockClient,
+    llm_client: LLMClient,
     max_retries: int = 2,
 ) -> ClassificationResult:
     """
@@ -125,7 +125,7 @@ def classify_document_with_retry(
     Args:
         extracted_text: Text extracted from the document
         filename: Original filename for context
-        bedrock_client: Initialized BedrockClient instance
+        llm_client: Initialized LLMClient instance
         max_retries: Maximum number of retry attempts
         
     Returns:
@@ -138,7 +138,7 @@ def classify_document_with_retry(
     
     for attempt in range(max_retries + 1):
         try:
-            return classify_document(extracted_text, filename, bedrock_client)
+            return classify_document(extracted_text, filename, llm_client)
         except Exception as e:
             last_error = e
             if attempt < max_retries:

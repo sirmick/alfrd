@@ -27,7 +27,7 @@ def run_server():
     print("   To test MCP tools directly:")
     print("   >>> from mcp_server.tools.classify_document import classify_document")
     print("   >>> from mcp_server.tools.summarize_bill import summarize_bill")
-    print("   >>> from mcp_server.llm import BedrockClient")
+    print("   >>> from mcp_server.llm import LLMClient")
     print()
     print("✅ No separate MCP server process needed!")
 

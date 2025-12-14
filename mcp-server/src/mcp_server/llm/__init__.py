@@ -1,6 +1,6 @@
 """
 LLM client modules for MCP server.
 """
-from .bedrock import BedrockClient
+from .client import LLMClient
 
-__all__ = ['BedrockClient']
+__all__ = ['LLMClient']

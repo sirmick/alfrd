@@ -6,7 +6,7 @@ import json
 from typing import Dict, Any
 from dataclasses import dataclass, asdict
 
-from mcp_server.llm import BedrockClient
+from mcp_server.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ Respond ONLY with valid JSON in this exact format:
 def summarize_bill(
     llm_data: Dict[str, Any],
     filename: str,
-    bedrock_client: BedrockClient,
+    llm_client: LLMClient,
 ) -> BillSummary:
     """
     Summarize a bill document using AWS Bedrock.
@@ -85,7 +85,7 @@ def summarize_bill(
     Args:
         llm_data: LLM-formatted data with full_text and optional blocks structure
         filename: Original filename for context
-        bedrock_client: Initialized BedrockClient instance
+        llm_client: Initialized LLMClient instance
         
     Returns:
         BillSummary with structured bill information
@@ -131,7 +131,7 @@ Extract structured bill information. Respond with JSON only."""
     
     try:
         # Invoke Bedrock with low temperature for consistent extraction
-        response = bedrock_client.invoke_with_system_and_user(
+        response = llm_client.invoke_with_system_and_user(
             system=BILL_SUMMARY_SYSTEM_PROMPT,
             user_message=user_message,
             temperature=0.0,
@@ -178,7 +178,7 @@ Extract structured bill information. Respond with JSON only."""
 def summarize_bill_with_retry(
     llm_data: Dict[str, Any],
     filename: str,
-    bedrock_client: BedrockClient,
+    llm_client: LLMClient,
     max_retries: int = 2,
 ) -> BillSummary:
     """
@@ -187,7 +187,7 @@ def summarize_bill_with_retry(
     Args:
         llm_data: LLM-formatted data with full_text and optional blocks
         filename: Original filename for context
-        bedrock_client: Initialized BedrockClient instance
+        llm_client: Initialized LLMClient instance
         max_retries: Maximum number of retry attempts
         
     Returns:
@@ -200,7 +200,7 @@ def summarize_bill_with_retry(
     
     for attempt in range(max_retries + 1):
         try:
-            return summarize_bill(llm_data, filename, bedrock_client)
+            return summarize_bill(llm_data, filename, llm_client)
         except Exception as e:
             last_error = e
             if attempt < max_retries:

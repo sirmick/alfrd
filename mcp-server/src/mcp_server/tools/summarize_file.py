@@ -63,7 +63,7 @@ def summarize_file(
     file_type: str = None,
     tags: List[str] = None,
     prompt: str = "",
-    bedrock_client = None,
+    llm_client = None,
     flattened_table: Optional[str] = None
 ) -> Dict[str, Any]:
     """Generate summary for a file (collection of documents).
@@ -73,7 +73,7 @@ def summarize_file(
         file_type: Optional document type (deprecated, use tags instead)
         tags: Tags defining this file
         prompt: Summarization prompt from DB
-        bedrock_client: AWS Bedrock client instance
+        llm_client: AWS Bedrock client instance
         flattened_table: Optional pre-generated flattened data table (markdown format)
     
     Returns:
@@ -162,7 +162,7 @@ Format your response as JSON:
     
     # Call Bedrock using the correct method
     try:
-        response_text = bedrock_client.invoke_with_system_and_user(
+        response_text = llm_client.invoke_with_system_and_user(
             system="You are a document summarization expert. Analyze collections of related documents and provide comprehensive summaries with insights.",
             user_message=user_message,
             temperature=0.1,
@@ -216,7 +216,7 @@ def score_file_summary(
     file_summary: str,
     documents: List[Dict[str, Any]],
     current_prompt: Dict[str, Any],
-    bedrock_client
+    llm_client
 ) -> Dict[str, Any]:
     """Score file summary quality and suggest improvements.
     
@@ -230,7 +230,7 @@ def score_file_summary(
         file_summary: Generated file summary
         documents: Source documents
         current_prompt: Current prompt dict with text and performance_score
-        bedrock_client: AWS Bedrock client instance
+        llm_client: AWS Bedrock client instance
     
     Returns:
         {
@@ -271,7 +271,7 @@ Provide your evaluation as JSON:
 }"""
     
     try:
-        response_text = bedrock_client.invoke_with_system_and_user(
+        response_text = llm_client.invoke_with_system_and_user(
             system="You are an expert at evaluating document summaries for quality and accuracy.",
             user_message=f"{scoring_prompt}\n\n--- CONTEXT ---\n\n{context}",
             temperature=0.1,

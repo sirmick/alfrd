@@ -16,7 +16,7 @@ sys.path.insert(0, project_root)
 # Change to project root so Settings can find .env
 os.chdir(project_root)
 
-from mcp_server.llm import BedrockClient
+from mcp_server.llm import LLMClient
 from mcp_server.tools.classify_document import classify_document
 
 # Sample documents to test
@@ -73,7 +73,7 @@ def test_classification():
     # Initialize Bedrock client
     try:
         print("Initializing Bedrock client...")
-        client = BedrockClient()
+        client = LLMClient()
         print("✓ Bedrock client initialized")
         print()
     except Exception as e:
@@ -94,7 +94,7 @@ def test_classification():
             result = classify_document(
                 extracted_text=text,
                 filename=filename,
-                bedrock_client=client,
+                llm_client=client,
             )
             
             print(f"✓ Classification successful")

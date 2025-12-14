@@ -8,7 +8,7 @@ import logging
 import json
 from typing import Dict, Any
 
-from mcp_server.llm import BedrockClient
+from mcp_server.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ def classify_document_dynamic(
     classifier_prompt: str,
     known_types: list[str],
     existing_tags: list[str],
-    bedrock_client: BedrockClient,
+    llm_client: LLMClient,
 ) -> Dict[str, Any]:
     """
     Classify a document using a dynamic DB-stored prompt.
@@ -30,7 +30,7 @@ def classify_document_dynamic(
         classifier_prompt: The classification prompt from database
         known_types: List of known document types
         existing_tags: List of existing tags from database for consistency
-        bedrock_client: Initialized BedrockClient instance
+        llm_client: Initialized LLMClient instance
         
     Returns:
         Dict with:
@@ -75,7 +75,7 @@ Respond with JSON:
         # Invoke Bedrock with low temperature for consistent classification
         logger.debug(f"Classifying {filename}")
         
-        response = bedrock_client.invoke_with_system_and_user(
+        response = llm_client.invoke_with_system_and_user(
             system="You are a document classification expert. Analyze documents and classify them accurately.",
             user_message=user_message,
             temperature=0.1,

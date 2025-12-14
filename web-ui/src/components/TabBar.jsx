@@ -40,6 +40,11 @@ function TabBar() {
           <IonLabel>Docs</IonLabel>
         </IonTabButton>
 
+        <IonTabButton tab="files" href="/files">
+          <IonIcon icon={folder} />
+          <IonLabel>Files</IonLabel>
+        </IonTabButton>
+
         <IonTabButton tab="series" href="/series">
           <IonIcon icon={layers} />
           <IonLabel>Series</IonLabel>

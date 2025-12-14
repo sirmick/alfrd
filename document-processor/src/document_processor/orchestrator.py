@@ -9,7 +9,7 @@ from uuid import UUID
 from shared.database import AlfrdDatabase
 from shared.config import Settings
 from shared.types import DocumentStatus
-from mcp_server.llm.bedrock import BedrockClient
+from mcp_server.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +20,11 @@ class SimpleOrchestrator:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.db: Optional[AlfrdDatabase] = None
-        self.bedrock: Optional[BedrockClient] = None
+        self.llm: Optional[LLMClient] = None
         
         # Semaphores for concurrency control (same as before)
         self.textract_sem = asyncio.Semaphore(settings.prefect_textract_workers)
-        self.bedrock_sem = asyncio.Semaphore(settings.prefect_bedrock_workers)
+        self.llm_sem = asyncio.Semaphore(settings.prefect_bedrock_workers)
         self.file_sem = asyncio.Semaphore(settings.prefect_file_generation_workers)
         
         # Flow-level semaphores
@@ -40,12 +40,20 @@ class SimpleOrchestrator:
         self.db = AlfrdDatabase(self.settings.database_url)
         await self.db.initialize()
         
-        self.bedrock = BedrockClient(
+        self.llm = LLMClient(
             aws_access_key_id=self.settings.aws_access_key_id,
             aws_secret_access_key=self.settings.aws_secret_access_key,
             aws_region=self.settings.aws_region
         )
-        
+
+        # Log configured providers
+        logger.info(f"📋 LLM Provider: {self.settings.llm_provider}")
+        logger.info(f"📋 OCR Provider: {self.settings.ocr_provider}")
+        if self.settings.llm_provider == "lmstudio":
+            logger.info(f"   LM Studio URL: {self.settings.lmstudio_base_url}")
+        if self.settings.ocr_provider == "tesseract":
+            logger.info(f"   Tesseract lang: {self.settings.tesseract_lang}")
+
         logger.info("✅ Orchestrator initialized")
     
     async def run(self, run_once: bool = False):
@@ -277,12 +285,12 @@ class SimpleOrchestrator:
             # Step 2: Classification (if needed)
             if status in ['pending', 'ocr_completed']:
                 classification = await classify_step(
-                    doc_id, extracted_text, self.db, self.bedrock
+                    doc_id, extracted_text, self.db, self.llm
                 )
                 
                 # Step 3: Score classification (background)
                 asyncio.create_task(
-                    score_classification_step(doc_id, classification, self.db, self.bedrock)
+                    score_classification_step(doc_id, classification, self.db, self.llm)
                 )
                 
                 doc = await self.db.get_document(doc_id)  # Refresh
@@ -290,11 +298,11 @@ class SimpleOrchestrator:
             
             # Step 4: Summarization (if needed)
             if status in ['pending', 'ocr_completed', 'classified']:
-                summary = await summarize_step(doc_id, self.db, self.bedrock)
+                summary = await summarize_step(doc_id, self.db, self.llm)
                 
                 # Step 5: Score summary (background)
                 asyncio.create_task(
-                    score_summary_step(doc_id, self.db, self.bedrock)
+                    score_summary_step(doc_id, self.db, self.llm)
                 )
                 
                 doc = await self.db.get_document(doc_id)  # Refresh
@@ -302,7 +310,7 @@ class SimpleOrchestrator:
             
             # Step 6: File into series (if needed) - MUST run before series summarization
             if status in ['pending', 'ocr_completed', 'classified', 'summarized']:
-                file_id = await file_step(doc_id, self.db, self.bedrock)
+                file_id = await file_step(doc_id, self.db, self.llm)
                 logger.info(f"✅ Document {doc_id} filed into {file_id}")
                 doc = await self.db.get_document(doc_id)  # Refresh
                 status = doc['status']
@@ -310,11 +318,11 @@ class SimpleOrchestrator:
             # Step 7: Series-specific summarization (if needed and document has series)
             # This runs AFTER file_step creates the series
             if status in ['pending', 'ocr_completed', 'classified', 'summarized', 'filed']:
-                await series_summarize_step(doc_id, self.db, self.bedrock)
+                await series_summarize_step(doc_id, self.db, self.llm)
                 
                 # Step 7b: Score series extraction (background)
                 asyncio.create_task(
-                    score_series_extraction_step(doc_id, self.db, self.bedrock)
+                    score_series_extraction_step(doc_id, self.db, self.llm)
                 )
                 
                 doc = await self.db.get_document(doc_id)  # Refresh
@@ -370,7 +378,7 @@ class SimpleOrchestrator:
             await self.db.update_file(file_id, status='generating')
             
             # Generate summary
-            await generate_file_summary_step(file_id, self.db, self.bedrock)
+            await generate_file_summary_step(file_id, self.db, self.llm)
             
             logger.info(f"✅ File {file_id} complete")
             
@@ -397,7 +405,7 @@ class SimpleOrchestrator:
                 regenerated = await regenerate_series_documents(
                     series['id'],
                     self.db,
-                    self.bedrock
+                    self.llm
                 )
                 logger.info(f"✅ Regenerated {regenerated} documents in series '{series['title']}'")
             except Exception as e:

@@ -3,7 +3,7 @@
 import json
 import re
 from typing import Dict, Any, Optional
-from mcp_server.llm.bedrock import BedrockClient
+from mcp_server.llm.client import LLMClient
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ def create_series_prompt_from_generic(
     series_entity: str,
     series_type: str,
     sample_document: str,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> Dict[str, Any]:
     """
     Create first series-specific prompt by analyzing a sample document.
@@ -24,7 +24,7 @@ def create_series_prompt_from_generic(
         series_entity: Entity name (e.g., "Pacific Gas & Electric")
         series_type: Series type (e.g., "monthly_utility_bill")
         sample_document: Sample document text for analysis
-        bedrock_client: Bedrock client
+        llm_client: Bedrock client
         
     Returns:
         Dict with 'prompt_text' and 'schema_definition'
@@ -77,7 +77,7 @@ RETURN ONLY THE JSON OBJECT. Example format:
 """
     
     try:
-        response = bedrock_client.invoke_with_system_and_user(
+        response = llm_client.invoke_with_system_and_user(
             system="You are a document schema analysis expert. Create precise extraction schemas for recurring documents. Always return valid JSON.",
             user_message=analysis_prompt,
             temperature=0.3,
@@ -140,7 +140,7 @@ def summarize_with_series_prompt(
     document_text: str,
     series_prompt_text: str,
     schema_definition: Dict[str, Any],
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> Dict[str, Any]:
     """
     Summarize document using series-specific prompt.
@@ -149,7 +149,7 @@ def summarize_with_series_prompt(
         document_text: Full document text
         series_prompt_text: Series-specific extraction prompt
         schema_definition: Expected schema for validation
-        bedrock_client: Bedrock client
+        llm_client: Bedrock client
         
     Returns:
         Structured data extracted according to series schema
@@ -203,7 +203,7 @@ Document:
 """
     
     try:
-        response = bedrock_client.invoke_with_system_and_user(
+        response = llm_client.invoke_with_system_and_user(
             system="You are a document extraction expert. Extract data precisely according to the provided schema. Always return valid JSON.",
             user_message=full_prompt,
             temperature=0.1,  # Low temp for consistency

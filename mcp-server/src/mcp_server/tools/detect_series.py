@@ -21,7 +21,7 @@ def detect_series(
     document_type: str,
     structured_data: Dict[str, Any],
     tags: list[str],
-    bedrock_client,
+    llm_client,
     series_prompt: str,
     existing_series: Optional[List[Dict[str, str]]] = None
 ) -> Dict[str, Any]:
@@ -32,7 +32,7 @@ def detect_series(
         document_type: Document type (e.g., "insurance", "bill", "finance")
         structured_data: Extracted structured data from document
         tags: Document tags
-        bedrock_client: AWS Bedrock client instance
+        llm_client: AWS Bedrock client instance
         series_prompt: Series detection prompt from database
         existing_series: Optional list of existing series for context injection
                         [{"entity": "State Farm", "series_type": "monthly_insurance_bill"}, ...]
@@ -88,7 +88,7 @@ Respond with JSON only."""
     
     try:
         # Call Bedrock with low temperature for consistent detection
-        response_text = bedrock_client.invoke_with_system_and_user(
+        response_text = llm_client.invoke_with_system_and_user(
             system=series_prompt,
             user_message=user_message,
             temperature=0.0,
@@ -144,7 +144,7 @@ def detect_series_with_retry(
     document_type: str,
     structured_data: Dict[str, Any],
     tags: list[str],
-    bedrock_client,
+    llm_client,
     series_prompt: str,
     existing_series: Optional[List[Dict[str, str]]] = None,
     max_retries: int = 2
@@ -156,7 +156,7 @@ def detect_series_with_retry(
         document_type: Document type
         structured_data: Extracted structured data
         tags: Document tags
-        bedrock_client: AWS Bedrock client instance
+        llm_client: AWS Bedrock client instance
         series_prompt: Series detection prompt from database
         existing_series: Optional list of existing series for context injection
         max_retries: Maximum number of retry attempts
@@ -172,7 +172,7 @@ def detect_series_with_retry(
     for attempt in range(max_retries + 1):
         try:
             return detect_series(
-                summary, document_type, structured_data, tags, bedrock_client,
+                summary, document_type, structured_data, tags, llm_client,
                 series_prompt, existing_series
             )
         except Exception as e:

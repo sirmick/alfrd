@@ -175,8 +175,8 @@ def log_state_transition(
     if document_type:
         log_data["document_type"] = document_type
     if extra:
-        log_data["extra"] = extra
-    
+        log_data.update(extra)  # Merge extra fields at top level
+
     logger.info(json.dumps(log_data))
 
 

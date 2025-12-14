@@ -154,11 +154,12 @@ class AlfrdDatabase:
             
             return dict(row) if row else None
     
-    async def update_document(self, doc_id: UUID, **fields):
+    async def update_document(self, doc_id: UUID, _extra_log: dict = None, **fields):
         """Update document fields.
-        
+
         Args:
             doc_id: Document UUID
+            _extra_log: Extra data to include in state transition log
             **fields: Fields to update (key=value pairs)
         """
         await self.initialize()
@@ -227,7 +228,8 @@ class AlfrdDatabase:
                 new_status=fields['status'],
                 filename=old_doc.get('filename'),
                 document_type=old_doc.get('document_type'),
-                retry_count=fields.get('retry_count', 0)
+                retry_count=fields.get('retry_count', 0),
+                extra=_extra_log
             )
     
     async def get_documents_by_status(self, status: str, limit: int = 10) -> List[Dict[str, Any]]:

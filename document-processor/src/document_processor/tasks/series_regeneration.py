@@ -11,7 +11,7 @@ from typing import Dict, Any
 
 from shared.database import AlfrdDatabase
 from shared.event_logger import get_event_logger
-from mcp_server.llm.bedrock import BedrockClient
+from mcp_server.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ async def _regenerate_single_document(
     doc: Dict[str, Any],
     series_prompt: Dict[str, Any],
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> None:
     """
     Re-extract a single document using the given series prompt.
@@ -45,7 +45,7 @@ async def _regenerate_single_document(
         doc['extracted_text'],
         series_prompt['prompt_text'],
         schema_def,
-        bedrock_client
+        llm_client
     )
 
     # Update document with new extraction (using the FIXED prompt)
@@ -62,7 +62,7 @@ async def _regenerate_single_document(
 async def regenerate_series_documents(
     series_id: UUID,
     db: AlfrdDatabase,
-    bedrock_client: BedrockClient
+    llm_client: LLMClient
 ) -> int:
     """Regenerate all documents in series with latest prompt.
     
@@ -76,7 +76,7 @@ async def regenerate_series_documents(
     Args:
         series_id: UUID of the series to regenerate
         db: Database connection
-        bedrock_client: Bedrock client for LLM calls
+        llm_client: Bedrock client for LLM calls
         
     Returns:
         Number of documents successfully regenerated
@@ -155,7 +155,7 @@ async def regenerate_series_documents(
 
                 # Direct extraction without triggering scoring/evolution
                 await _regenerate_single_document(
-                    doc_id, doc, series_prompt, db, bedrock_client
+                    doc_id, doc, series_prompt, db, llm_client
                 )
                 regenerated += 1
                 

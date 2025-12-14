@@ -9,7 +9,7 @@ import json
 import re
 from typing import Dict, Any
 
-from mcp_server.llm import BedrockClient
+from mcp_server.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def score_classification(
     document_info: Dict[str, Any],
     classifier_prompt: str,
-    bedrock_client: BedrockClient,
+    llm_client: LLMClient,
 ) -> Dict[str, Any]:
     """
     Score how well a classification was performed.
@@ -26,7 +26,7 @@ def score_classification(
         document_info: Dict with extracted_text, filename, document_type,
                       confidence, reasoning, tags
         classifier_prompt: The prompt that was used for classification
-        bedrock_client: Initialized BedrockClient instance
+        llm_client: Initialized LLMClient instance
         
     Returns:
         Dict with:
@@ -75,7 +75,7 @@ Respond with JSON:
 }}"""
     
     try:
-        response = bedrock_client.invoke_with_system_and_user(
+        response = llm_client.invoke_with_system_and_user(
             system="You are an expert at evaluating document classification quality.",
             user_message=scoring_prompt,
             temperature=0.3,
@@ -105,7 +105,7 @@ Respond with JSON:
 def score_summarization(
     document_info: Dict[str, Any],
     summarizer_prompt: str,
-    bedrock_client: BedrockClient,
+    llm_client: LLMClient,
 ) -> Dict[str, Any]:
     """
     Score how well a summarization was performed.
@@ -113,7 +113,7 @@ def score_summarization(
     Args:
         document_info: Dict with extracted_text, filename, document_type, structured_data
         summarizer_prompt: The prompt that was used for summarization
-        bedrock_client: Initialized BedrockClient instance
+        llm_client: Initialized LLMClient instance
         
     Returns:
         Dict with:
@@ -161,7 +161,7 @@ Respond with JSON:
 }}"""
     
     try:
-        response = bedrock_client.invoke_with_system_and_user(
+        response = llm_client.invoke_with_system_and_user(
             system="You are an expert at evaluating document summarization quality.",
             user_message=scoring_prompt,
             temperature=0.3,
@@ -195,7 +195,7 @@ def evolve_prompt(
     feedback: str,
     improvements: str,
     max_words: int = 300,
-    bedrock_client: BedrockClient = None,
+    llm_client: LLMClient = None,
 ) -> str:
     """
     Generate an improved prompt based on feedback.
@@ -207,7 +207,7 @@ def evolve_prompt(
         feedback: Performance feedback
         improvements: Suggested improvements
         max_words: Maximum words for new prompt (default 300 for classifier)
-        bedrock_client: Initialized BedrockClient instance
+        llm_client: Initialized LLMClient instance
         
     Returns:
         Improved prompt text
@@ -256,7 +256,7 @@ Rewrite the summarizer prompt to be more effective for {document_type} documents
 Respond with ONLY the new prompt text (no JSON, no explanation)."""
     
     try:
-        response = bedrock_client.invoke_with_system_and_user(
+        response = llm_client.invoke_with_system_and_user(
             system="You are an expert at writing effective AI prompts.",
             user_message=evolution_prompt,
             temperature=0.5,  # Some creativity for improvements
