@@ -37,10 +37,12 @@ import {
   documentTextOutline,
   addOutline,
 } from 'ionicons/icons';
+import { useAuth } from '../context/AuthContext';
 
 const API_BASE = '/api/v1';
 
 const PromptsPage = () => {
+  const { authFetch } = useAuth();
   const [prompts, setPrompts] = useState([]);
   const [documentTypes, setDocumentTypes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -71,7 +73,7 @@ const PromptsPage = () => {
       }
       params.append('include_inactive', includeInactive);
 
-      const response = await fetch(`${API_BASE}/prompts?${params}`);
+      const response = await authFetch(`${API_BASE}/prompts?${params}`);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -89,7 +91,7 @@ const PromptsPage = () => {
 
   const loadDocumentTypes = async () => {
     try {
-      const response = await fetch(`${API_BASE}/document-types`);
+      const response = await authFetch(`${API_BASE}/document-types`);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -130,7 +132,7 @@ const PromptsPage = () => {
         params.append('document_type', editorDocType);
       }
 
-      const response = await fetch(`${API_BASE}/prompts?${params}`, {
+      const response = await authFetch(`${API_BASE}/prompts?${params}`, {
         method: 'POST',
       });
 

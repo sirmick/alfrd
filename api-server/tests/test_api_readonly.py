@@ -48,7 +48,12 @@ from api_server.main import (
     get_prompt,
     list_document_types,
     get_events,
+    chat,
+    delete_chat_session,
+    ChatRequest,
+    ChatResponse,
 )
+from api_server.chat_service import ChatService, ChatSession
 from fastapi import HTTPException
 
 
@@ -981,3 +986,239 @@ class TestWorkflowCrossSeriesNavigation:
             if e["event_category"] == "state_transition"
         ]
         assert len(state_transitions) > 0, "Completed doc should have state transitions"
+
+
+# ==========================================
+# CHAT SERVICE TESTS
+# ==========================================
+
+class TestChatService:
+    """Test the ChatService class directly (no LLM calls)."""
+
+    async def test_chat_session_creation(self):
+        """Test creating a chat session."""
+        session = ChatSession("test-session-123")
+        assert session.session_id == "test-session-123"
+        assert session.conversation_history == []
+
+    async def test_chat_session_add_messages(self):
+        """Test adding messages to a session."""
+        session = ChatSession("test-session")
+        session.add_user_message("Hello")
+        session.add_assistant_message("Hi there!")
+
+        assert len(session.conversation_history) == 2
+        assert session.conversation_history[0]["role"] == "user"
+        assert session.conversation_history[0]["content"] == "Hello"
+        assert session.conversation_history[1]["role"] == "assistant"
+        assert session.conversation_history[1]["content"] == "Hi there!"
+
+    async def test_chat_session_history_limit(self):
+        """Test that session history is limited to 20 messages."""
+        session = ChatSession("test-session")
+
+        # Add 25 messages
+        for i in range(25):
+            session.add_user_message(f"Message {i}")
+
+        # Should be limited to 20
+        assert len(session.conversation_history) == 20
+        # Most recent messages should be kept
+        assert session.conversation_history[-1]["content"] == "Message 24"
+
+    async def test_chat_session_clear(self):
+        """Test clearing session history."""
+        session = ChatSession("test-session")
+        session.add_user_message("Hello")
+        session.add_assistant_message("Hi!")
+
+        session.clear()
+        assert session.conversation_history == []
+
+    async def test_chat_service_session_management(self, db):
+        """Test ChatService session management."""
+        service = ChatService(db)
+
+        # Get or create a new session
+        session1 = service.get_or_create_session()
+        assert session1.session_id is not None
+
+        # Get the same session by ID
+        session2 = service.get_or_create_session(session1.session_id)
+        assert session1.session_id == session2.session_id
+
+        # Delete the session
+        result = service.delete_session(session1.session_id)
+        assert result is True
+
+        # Deleting again should return False
+        result = service.delete_session(session1.session_id)
+        assert result is False
+
+    async def test_chat_service_has_tools(self, db):
+        """Test that ChatService has expected tools defined."""
+        service = ChatService(db)
+
+        # Should have tools defined
+        assert len(service.tools) > 0
+
+        # Check for expected tool names
+        tool_names = [t["name"] for t in service.tools]
+        expected_tools = [
+            "search", "list_series", "get_series_details",
+            "list_document_types", "get_document", "get_stats",
+            "list_files", "list_tags"
+        ]
+        for expected in expected_tools:
+            assert expected in tool_names, f"Missing tool: {expected}"
+
+    async def test_chat_service_tool_schemas(self, db):
+        """Test that tool schemas are properly defined."""
+        service = ChatService(db)
+
+        for tool in service.tools:
+            assert "name" in tool
+            assert "description" in tool
+            assert "input_schema" in tool
+            assert tool["input_schema"]["type"] == "object"
+
+
+class TestChatServiceToolExecution:
+    """Test ChatService tool execution (database operations only, no LLM)."""
+
+    async def test_execute_search_tool(self, db):
+        """Test executing the search tool."""
+        service = ChatService(db)
+        result = await service.execute_tool("search", {"query": "bill", "limit": 5})
+
+        # Result should be JSON string
+        import json
+        data = json.loads(result)
+        assert "documents" in data or "error" not in data
+
+    async def test_execute_list_series_tool(self, db):
+        """Test executing the list_series tool."""
+        service = ChatService(db)
+        result = await service.execute_tool("list_series", {"limit": 5})
+
+        import json
+        data = json.loads(result)
+        assert isinstance(data, list)
+
+    async def test_execute_list_document_types_tool(self, db):
+        """Test executing the list_document_types tool."""
+        service = ChatService(db)
+        result = await service.execute_tool("list_document_types", {})
+
+        import json
+        data = json.loads(result)
+        assert isinstance(data, list)
+
+    async def test_execute_get_stats_tool(self, db):
+        """Test executing the get_stats tool."""
+        service = ChatService(db)
+        result = await service.execute_tool("get_stats", {})
+
+        import json
+        data = json.loads(result)
+        # Stats should have document counts
+        assert "total_documents" in data or isinstance(data, dict)
+
+    async def test_execute_list_files_tool(self, db):
+        """Test executing the list_files tool."""
+        service = ChatService(db)
+        result = await service.execute_tool("list_files", {"limit": 5})
+
+        import json
+        data = json.loads(result)
+        assert isinstance(data, list)
+
+    async def test_execute_list_tags_tool(self, db):
+        """Test executing the list_tags tool."""
+        service = ChatService(db)
+        result = await service.execute_tool("list_tags", {"limit": 10})
+
+        import json
+        data = json.loads(result)
+        assert isinstance(data, list)
+
+    async def test_execute_unknown_tool(self, db):
+        """Test executing an unknown tool returns error."""
+        service = ChatService(db)
+        result = await service.execute_tool("unknown_tool", {})
+
+        import json
+        data = json.loads(result)
+        assert "error" in data
+        assert "unknown" in data["error"].lower()
+
+    async def test_execute_get_document_not_found(self, db):
+        """Test get_document tool with non-existent ID."""
+        service = ChatService(db)
+        result = await service.execute_tool("get_document", {
+            "document_id": "00000000-0000-0000-0000-000000000000"
+        })
+
+        import json
+        data = json.loads(result)
+        assert "error" in data
+
+    async def test_execute_get_series_details(self, db, sample_series_id):
+        """Test get_series_details tool with valid ID."""
+        if not sample_series_id:
+            pytest.skip("No series in database")
+
+        service = ChatService(db)
+        result = await service.execute_tool("get_series_details", {
+            "series_id": sample_series_id
+        })
+
+        import json
+        data = json.loads(result)
+        assert "series" in data
+        assert "documents" in data
+
+    async def test_execute_get_document(self, db, sample_document_id):
+        """Test get_document tool with valid ID."""
+        if not sample_document_id:
+            pytest.skip("No documents in database")
+
+        service = ChatService(db)
+        result = await service.execute_tool("get_document", {
+            "document_id": sample_document_id
+        })
+
+        import json
+        data = json.loads(result)
+        assert "id" in data
+        assert data["id"] == sample_document_id
+
+
+class TestChatServiceSystemPrompt:
+    """Test ChatService system prompt building."""
+
+    async def test_build_system_prompt(self, db):
+        """Test that system prompt is built with context."""
+        service = ChatService(db)
+        prompt = await service._build_system_prompt()
+
+        # Prompt should contain key sections
+        assert isinstance(prompt, str)
+        assert len(prompt) > 100  # Should be substantial
+
+        # Should have template variables replaced (not raw {{SERIES}})
+        assert "{{SERIES}}" not in prompt
+        assert "{{FILES}}" not in prompt
+        assert "{{TAGS}}" not in prompt
+
+    async def test_system_prompt_includes_series_context(self, db):
+        """Test that system prompt includes series information."""
+        service = ChatService(db)
+        prompt = await service._build_system_prompt()
+
+        # If we have series, they should be mentioned
+        series = await db.list_series(limit=1)
+        if series:
+            # The prompt should contain some indication of available data
+            # Either series IDs or "No document series found"
+            assert "series" in prompt.lower() or "docs" in prompt.lower()

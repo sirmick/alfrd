@@ -20,9 +20,11 @@ import {
 } from '@ionic/react'
 import { documentText, layers, search as searchIcon } from 'ionicons/icons'
 import { useHistory } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 
 function SearchPage() {
   const history = useHistory()
+  const { authFetch } = useAuth()
   const [searchQuery, setSearchQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -42,7 +44,7 @@ function SearchPage() {
       setError(null)
       setHasSearched(true)
 
-      const response = await fetch(
+      const response = await authFetch(
         `/api/v1/search?q=${encodeURIComponent(query)}&limit=50&include_documents=true&include_files=false&include_series=true`
       )
       if (!response.ok) {

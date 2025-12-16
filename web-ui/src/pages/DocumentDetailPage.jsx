@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { 
+import {
   IonPage,
   IonHeader,
   IonToolbar,
@@ -21,14 +21,24 @@ import {
   IonButton,
   IonIcon
 } from '@ionic/react'
-import { useParams } from 'react-router-dom'
-import { openOutline } from 'ionicons/icons'
+import { useParams, useHistory } from 'react-router-dom'
+import { openOutline, listOutline } from 'ionicons/icons'
+import { useAuth } from '../context/AuthContext'
 
 function DocumentDetailPage() {
   const { id } = useParams()
+  const history = useHistory()
+  const { authFetch, token } = useAuth()
   const [document, setDocument] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  // Helper to add token to file URLs for authenticated access
+  const getAuthenticatedUrl = (url) => {
+    if (!url || !token) return url
+    const separator = url.includes('?') ? '&' : '?'
+    return `${url}${separator}token=${token}`
+  }
 
   useEffect(() => {
     fetchDocument()
@@ -38,8 +48,8 @@ function DocumentDetailPage() {
     try {
       setLoading(true)
       setError(null)
-      
-      const response = await fetch(`/api/v1/documents/${id}`)
+
+      const response = await authFetch(`/api/v1/documents/${id}`)
       if (!response.ok) {
         throw new Error(`Failed to fetch document: ${response.statusText}`)
       }
@@ -146,7 +156,7 @@ function DocumentDetailPage() {
             </IonCardHeader>
             <IonCardContent>
               <img
-                src={document.files[0].url}
+                src={getAuthenticatedUrl(document.files[0].url)}
                 alt="Document preview"
                 style={{ width: '100%', maxHeight: '400px', objectFit: 'contain' }}
               />
@@ -172,7 +182,7 @@ function DocumentDetailPage() {
                   <p>{document.document_type || 'Unknown'}</p>
                 </IonLabel>
               </IonItem>
-              
+
               {document.suggested_type && (
                 <IonItem>
                   <IonLabel>
@@ -181,14 +191,14 @@ function DocumentDetailPage() {
                   </IonLabel>
                 </IonItem>
               )}
-              
+
               <IonItem>
                 <IonLabel>
                   <h3>Created</h3>
                   <p>{formatDate(document.created_at)}</p>
                 </IonLabel>
               </IonItem>
-              
+
               {document.updated_at && (
                 <IonItem>
                   <IonLabel>
@@ -198,6 +208,16 @@ function DocumentDetailPage() {
                 </IonItem>
               )}
             </IonList>
+
+            <IonButton
+              expand="block"
+              fill="outline"
+              onClick={() => history.push(`/events?document_id=${id}`)}
+              style={{ marginTop: '12px' }}
+            >
+              <IonIcon icon={listOutline} slot="start" />
+              View Events
+            </IonButton>
           </IonCardContent>
         </IonCard>
 
@@ -330,7 +350,7 @@ function DocumentDetailPage() {
             <IonCardContent>
               <IonList>
                 {document.files.map((file, idx) => (
-                  <IonItem key={idx} button href={file.url} target="_blank">
+                  <IonItem key={idx} button href={getAuthenticatedUrl(file.url)} target="_blank">
                     <IonLabel>{file.filename}</IonLabel>
                     <IonIcon icon={openOutline} slot="end" />
                   </IonItem>

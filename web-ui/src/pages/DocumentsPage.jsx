@@ -21,9 +21,11 @@ import {
 } from '@ionic/react'
 import { camera, refresh } from 'ionicons/icons'
 import { useHistory } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 
 function DocumentsPage() {
   const history = useHistory()
+  const { authFetch } = useAuth()
   const [documents, setDocuments] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -33,7 +35,7 @@ function DocumentsPage() {
       setLoading(true)
       setError(null)
 
-      const response = await fetch('/api/v1/documents?limit=50')
+      const response = await authFetch('/api/v1/documents?limit=50')
       if (!response.ok) {
         throw new Error(`Failed to fetch documents: ${response.statusText}`)
       }

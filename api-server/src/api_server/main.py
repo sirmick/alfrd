@@ -13,16 +13,27 @@ from contextlib import asynccontextmanager
 from uuid import UUID
 
 # Add project root to path for shared imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
+project_root = Path(__file__).parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
+# Add api-server/src to path for local imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add mcp-server/src to path for LLM client
+sys.path.insert(0, str(project_root / "mcp-server" / "src"))
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
 from shared.config import Settings
 from shared.database import AlfrdDatabase
 from shared.json_flattener import flatten_to_dataframe
+from api_server.auth import (
+    Token, LoginRequest, UserResponse,
+    verify_password, create_access_token, decode_token, hash_password
+)
 
 # Configure logging
 logging.basicConfig(
@@ -78,7 +89,72 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
+# Public routes that don't require authentication
+PUBLIC_ROUTES = {
+    "/",
+    "/api/v1/health",
+    "/api/v1/status",
+    "/api/v1/auth/login",
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+}
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Middleware to enforce authentication on non-public routes."""
+
+    async def dispatch(self, request: Request, call_next):
+        # Skip auth for public routes
+        path = request.url.path
+
+        # Check if route is public
+        if path in PUBLIC_ROUTES:
+            return await call_next(request)
+
+        # Check for static file routes or docs
+        if path.startswith("/docs") or path.startswith("/redoc"):
+            return await call_next(request)
+
+        # Get Authorization header
+        auth_header = request.headers.get("Authorization")
+
+        # For file serving endpoints, also check for token in query params (for <img> tags)
+        # Pattern: /api/v1/documents/{uuid}/file/{filename}?token=xxx
+        if "/file/" in path and path.startswith("/api/v1/documents/"):
+            query_token = request.query_params.get("token")
+            if query_token:
+                token_data = decode_token(query_token)
+                if token_data and token_data.user_id:
+                    request.state.user_id = token_data.user_id
+                    request.state.username = token_data.username
+                    return await call_next(request)
+
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Not authenticated"},
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+
+        token = auth_header.replace("Bearer ", "")
+        token_data = decode_token(token)
+
+        if token_data is None or token_data.user_id is None:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or expired token"},
+                headers={"WWW-Authenticate": "Bearer"}
+            )
+
+        # Store user info in request state for later use
+        request.state.user_id = token_data.user_id
+        request.state.username = token_data.username
+
+        return await call_next(request)
+
+
+# CORS middleware (must be added after other middleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if settings.env == "development" else [],
@@ -86,6 +162,67 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Auth middleware
+app.add_middleware(AuthMiddleware)
+
+# HTTP Bearer security scheme for JWT
+security = HTTPBearer(auto_error=False)
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    database: AlfrdDatabase = Depends(get_db)
+) -> dict:
+    """Dependency to get the current authenticated user."""
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    if credentials is None:
+        raise credentials_exception
+
+    token_data = decode_token(credentials.credentials)
+
+    if token_data is None or token_data.user_id is None:
+        raise credentials_exception
+
+    user = await database.get_user_by_id(token_data.user_id)
+
+    if user is None:
+        raise credentials_exception
+
+    if not user.get("is_active", False):
+        raise HTTPException(
+            status_code=401,
+            detail="User account is disabled"
+        )
+
+    return user
+
+
+async def optional_auth(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    database: AlfrdDatabase = Depends(get_db)
+) -> Optional[dict]:
+    """Optional auth dependency - returns user if authenticated, None otherwise."""
+    if credentials is None:
+        return None
+
+    try:
+        token_data = decode_token(credentials.credentials)
+        if token_data is None or token_data.user_id is None:
+            return None
+
+        user = await database.get_user_by_id(token_data.user_id)
+        if user is None or not user.get("is_active", False):
+            return None
+
+        return user
+    except Exception:
+        return None
 
 
 @app.get("/")
@@ -129,6 +266,75 @@ async def status():
         "api_server": {"status": "healthy"}
     }
 
+
+# ==================== Authentication Endpoints ====================
+
+@app.post("/api/v1/auth/login", response_model=Token)
+async def login(
+    login_request: LoginRequest,
+    database: AlfrdDatabase = Depends(get_db)
+):
+    """
+    Authenticate user and return JWT token.
+
+    Args:
+        login_request: Username and password
+
+    Returns:
+        JWT access token
+    """
+    user = await database.get_user_by_username(login_request.username)
+
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    if not verify_password(login_request.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    if not user.get("is_active", False):
+        raise HTTPException(
+            status_code=401,
+            detail="User account is disabled"
+        )
+
+    # Update last login
+    await database.update_last_login(str(user["id"]))
+
+    # Create access token
+    access_token = create_access_token(
+        data={
+            "sub": str(user["id"]),
+            "username": user["username"]
+        }
+    )
+
+    return Token(access_token=access_token)
+
+
+@app.get("/api/v1/auth/me", response_model=UserResponse)
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """
+    Get current authenticated user info.
+
+    Returns:
+        Current user details
+    """
+    return UserResponse(
+        id=str(current_user["id"]),
+        username=current_user["username"],
+        is_active=current_user["is_active"],
+        created_at=current_user["created_at"],
+        last_login=current_user.get("last_login")
+    )
+
+
+# ==================== Document Endpoints ====================
 
 @app.post("/api/v1/documents/upload-image")
 async def upload_image(file: UploadFile = File(...)):
@@ -1284,6 +1490,108 @@ async def list_document_types(
 # ==========================================
 # EVENT LOG ENDPOINTS
 # ==========================================
+
+from pydantic import BaseModel
+
+class ChatRequest(BaseModel):
+    """Request model for chat endpoint."""
+    message: str
+    session_id: Optional[str] = None
+
+
+class ChatResponse(BaseModel):
+    """Response model for chat endpoint."""
+    response: str
+    session_id: str
+    tool_calls: List[dict] = []
+
+
+# Global chat service (initialized lazily)
+_chat_service = None
+
+
+async def get_chat_service(database: AlfrdDatabase = Depends(get_db)):
+    """Get or create chat service instance."""
+    global _chat_service
+    if _chat_service is None:
+        # Import works both as module and when run directly
+        try:
+            from .chat_service import ChatService
+        except ImportError:
+            from api_server.chat_service import ChatService
+        _chat_service = ChatService(database)
+    return _chat_service
+
+
+# ==========================================
+# CHAT ENDPOINTS
+# ==========================================
+
+@app.post("/api/v1/chat", response_model=ChatResponse)
+async def chat(
+    request: ChatRequest,
+    chat_service = Depends(get_chat_service)
+):
+    """
+    Send a message to the AI assistant.
+
+    The assistant can query documents, series, files, and tags using tools.
+    Provide a session_id to continue a conversation, or omit it to start a new one.
+
+    Request Body:
+        - message: The user's message
+        - session_id: Optional session ID to continue a conversation
+
+    Returns:
+        AI response with session ID for continuation
+    """
+    logger.info(f"POST /api/v1/chat - session={request.session_id}, message={request.message[:50]}...")
+    try:
+        result = await chat_service.chat(
+            user_message=request.message,
+            session_id=request.session_id
+        )
+
+        return ChatResponse(
+            response=result["response"],
+            session_id=result["session_id"],
+            tool_calls=result.get("tool_calls", [])
+        )
+
+    except Exception as e:
+        logger.error(f"Error in chat: {str(e)}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"Chat error: {str(e)}")
+
+
+@app.delete("/api/v1/chat/{session_id}")
+async def delete_chat_session(
+    session_id: str,
+    chat_service = Depends(get_chat_service)
+):
+    """
+    Delete a chat session to clear conversation history.
+
+    Path Parameters:
+        - session_id: The session ID to delete
+
+    Returns:
+        Confirmation of deletion
+    """
+    logger.info(f"DELETE /api/v1/chat/{session_id}")
+    try:
+        deleted = chat_service.delete_session(session_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+        return {"message": "Session deleted", "session_id": session_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting session: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error deleting session: {str(e)}")
+
 
 @app.get("/api/v1/events")
 async def get_events(

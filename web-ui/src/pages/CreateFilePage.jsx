@@ -23,9 +23,11 @@ import {
 } from '@ionic/react'
 import { add, close } from 'ionicons/icons'
 import { useHistory } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 
 function CreateFilePage() {
   const history = useHistory()
+  const { authFetch } = useAuth()
   const [tags, setTags] = useState([])
   const [tagInput, setTagInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -39,7 +41,7 @@ function CreateFilePage() {
   const fetchAvailableTags = async () => {
     try {
       // Fetch all documents to extract popular tags
-      const response = await fetch('/api/v1/documents?limit=100&status=completed')
+      const response = await authFetch('/api/v1/documents?limit=100&status=completed')
       if (!response.ok) {
         throw new Error('Failed to fetch documents')
       }
@@ -85,7 +87,7 @@ function CreateFilePage() {
 
       const url = `/api/v1/files/create?${params.toString()}`
 
-      const response = await fetch(url, {
+      const response = await authFetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'

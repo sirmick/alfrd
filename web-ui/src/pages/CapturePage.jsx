@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { 
+import {
   IonPage,
   IonHeader,
   IonToolbar,
@@ -18,9 +18,11 @@ import {
 import { camera } from 'ionicons/icons'
 import { Camera, CameraResultType } from '@capacitor/camera'
 import { useHistory } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 
 function CapturePage() {
   const history = useHistory()
+  const { authFetch } = useAuth()
   const [photo, setPhoto] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [toast, setToast] = useState({ show: false, message: '', color: 'success' })
@@ -67,7 +69,7 @@ function CapturePage() {
       
       // Upload to API
       console.log('[Upload] Sending POST to /api/v1/documents/upload-image...')
-      const response = await fetch('/api/v1/documents/upload-image', {
+      const response = await authFetch('/api/v1/documents/upload-image', {
         method: 'POST',
         body: formData
       })

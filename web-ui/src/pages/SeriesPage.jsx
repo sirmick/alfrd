@@ -21,9 +21,11 @@ import {
 } from '@ionic/react'
 import { refresh, close, layers } from 'ionicons/icons'
 import { useHistory } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 
 function SeriesPage() {
   const history = useHistory()
+  const { authFetch } = useAuth()
   const [series, setSeries] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -40,7 +42,7 @@ function SeriesPage() {
       if (frequencyFilter) params.append('frequency', frequencyFilter)
       if (statusFilter) params.append('status', statusFilter)
 
-      const response = await fetch(`/api/v1/series?${params}`)
+      const response = await authFetch(`/api/v1/series?${params}`)
       if (!response.ok) {
         throw new Error(`Failed to fetch series: ${response.statusText}`)
       }

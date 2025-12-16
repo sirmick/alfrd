@@ -26,14 +26,17 @@ import {
   ellipsisVertical,
   reload,
   documentText,
-  chevronForward
+  chevronForward,
+  listOutline
 } from 'ionicons/icons'
 import { useHistory, useParams } from 'react-router-dom'
 import DataTable from '../components/DataTable'
+import { useAuth } from '../context/AuthContext'
 
 function FileDetailPage() {
   const history = useHistory()
   const { id: fileId } = useParams()
+  const { authFetch } = useAuth()
   
   const [file, setFile] = useState(null)
   const [documents, setDocuments] = useState([])
@@ -49,8 +52,8 @@ function FileDetailPage() {
     try {
       setLoading(true)
       setError(null)
-      
-      const response = await fetch(`/api/v1/files/${fileId}`)
+
+      const response = await authFetch(`/api/v1/files/${fileId}`)
       if (!response.ok) {
         throw new Error(`Failed to fetch file: ${response.statusText}`)
       }
@@ -69,8 +72,8 @@ function FileDetailPage() {
   const fetchFlattenedData = async () => {
     try {
       setLoadingFlattened(true)
-      
-      const response = await fetch(`/api/v1/files/${fileId}/flatten?array_strategy=flatten`)
+
+      const response = await authFetch(`/api/v1/files/${fileId}/flatten?array_strategy=flatten`)
       if (!response.ok) {
         throw new Error(`Failed to fetch flattened data: ${response.statusText}`)
       }
@@ -109,7 +112,7 @@ function FileDetailPage() {
   const handleRegenerate = async () => {
     try {
       setRegenerating(true)
-      const response = await fetch(`/api/v1/files/${fileId}/regenerate`, {
+      const response = await authFetch(`/api/v1/files/${fileId}/regenerate`, {
         method: 'POST'
       })
       
@@ -293,15 +296,27 @@ function FileDetailPage() {
                 </div>
               </IonCardHeader>
               <IonCardContent>
-                <IonButton
-                  expand="block"
-                  fill="outline"
-                  onClick={handleRegenerate}
-                  disabled={regenerating || file.status === 'regenerating'}
-                >
-                  <IonIcon icon={reload} slot="start" />
-                  {regenerating ? 'Regenerating...' : 'Regenerate'}
-                </IonButton>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <IonButton
+                    expand="block"
+                    fill="outline"
+                    onClick={handleRegenerate}
+                    disabled={regenerating || file.status === 'regenerating'}
+                    style={{ flex: 1 }}
+                  >
+                    <IonIcon icon={reload} slot="start" />
+                    {regenerating ? 'Regenerating...' : 'Regenerate'}
+                  </IonButton>
+                  <IonButton
+                    expand="block"
+                    fill="outline"
+                    onClick={() => history.push(`/events?file_id=${fileId}`)}
+                    style={{ flex: 1 }}
+                  >
+                    <IonIcon icon={listOutline} slot="start" />
+                    Events
+                  </IonButton>
+                </div>
               </IonCardContent>
             </IonCard>
 

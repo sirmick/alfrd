@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     # LM Studio runs locally and provides an OpenAI-compatible API
     lmstudio_base_url: str = "http://localhost:1234/v1"
     lmstudio_model: str = "local-model"  # Model name loaded in LM Studio
+    lmstudio_native_tools: bool = True  # Use native tool calling (set False for models that don't support it)
 
     # OpenAI Configuration (when llm_provider = "openai")
     openai_api_key: str = ""
@@ -127,6 +128,11 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     env: str = "development"
+
+    # JWT Authentication
+    jwt_secret_key: str = "alfrd-dev-secret-change-in-production"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_hours: int = 24
     
     model_config = SettingsConfigDict(
         env_file=".env",

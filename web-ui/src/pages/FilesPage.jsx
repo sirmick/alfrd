@@ -21,9 +21,11 @@ import {
 } from '@ionic/react'
 import { folder, add, refresh } from 'ionicons/icons'
 import { useHistory } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 
 function FilesPage() {
   const history = useHistory()
+  const { authFetch } = useAuth()
   const [files, setFiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -33,7 +35,7 @@ function FilesPage() {
       setLoading(true)
       setError(null)
 
-      const response = await fetch('/api/v1/files?limit=50')
+      const response = await authFetch('/api/v1/files?limit=50')
       if (!response.ok) {
         throw new Error(`Failed to fetch files: ${response.statusText}`)
       }

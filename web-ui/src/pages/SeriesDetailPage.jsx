@@ -22,12 +22,14 @@ import {
   IonRefresherContent,
   IonAlert
 } from '@ionic/react'
-import { refresh, documentText, sparkles } from 'ionicons/icons'
+import { refresh, documentText, sparkles, listOutline } from 'ionicons/icons'
 import { useParams, useHistory } from 'react-router-dom'
+import { useAuth } from '../context/AuthContext'
 
 function SeriesDetailPage() {
   const { id } = useParams()
   const history = useHistory()
+  const { authFetch } = useAuth()
   const [series, setSeries] = useState(null)
   const [documents, setDocuments] = useState([])
   const [loading, setLoading] = useState(true)
@@ -41,7 +43,7 @@ function SeriesDetailPage() {
       setError(null)
       
       // Fetch series metadata
-      const seriesResponse = await fetch(`/api/v1/series/${id}`)
+      const seriesResponse = await authFetch(`/api/v1/series/${id}`)
       if (!seriesResponse.ok) {
         throw new Error(`Failed to fetch series: ${seriesResponse.statusText}`)
       }
@@ -62,8 +64,8 @@ function SeriesDetailPage() {
     try {
       setRegenerating(true)
       setShowRegenerateAlert(false)
-      
-      const response = await fetch(`/api/v1/series/${id}/regenerate`, {
+
+      const response = await authFetch(`/api/v1/series/${id}/regenerate`, {
         method: 'POST'
       })
       
@@ -218,16 +220,27 @@ function SeriesDetailPage() {
                   </div>
                 )}
                 
-                {/* Regenerate button */}
-                <IonButton
-                  expand="block"
-                  onClick={() => setShowRegenerateAlert(true)}
-                  disabled={regenerating}
-                  style={{ marginTop: '16px' }}
-                >
-                  <IonIcon icon={sparkles} slot="start" />
-                  {regenerating ? 'Regenerating...' : 'Regenerate Summary'}
-                </IonButton>
+                {/* Action buttons */}
+                <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
+                  <IonButton
+                    expand="block"
+                    onClick={() => setShowRegenerateAlert(true)}
+                    disabled={regenerating}
+                    style={{ flex: 1 }}
+                  >
+                    <IonIcon icon={sparkles} slot="start" />
+                    {regenerating ? 'Regenerating...' : 'Regenerate'}
+                  </IonButton>
+                  <IonButton
+                    expand="block"
+                    fill="outline"
+                    onClick={() => history.push(`/events?series_id=${id}`)}
+                    style={{ flex: 1 }}
+                  >
+                    <IonIcon icon={listOutline} slot="start" />
+                    Events
+                  </IonButton>
+                </div>
               </IonCardContent>
             </IonCard>
 
